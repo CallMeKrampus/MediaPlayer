@@ -1,0 +1,22 @@
+{
+  "name": "iina-plugin-dv-tonemap",
+  "version": "1.0.0",
+  "description": "Dolby Vision Profile 5 to SDR/HDR Tonemapper & Purple/Green Tint Fix for IINA on macOS",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Ready\""
+  },
+  "keywords": [
+    "iina",
+    "iina-plugin",
+    "dolby-vision",
+    "dovi",
+    "profile-5",
+    "tonemapping",
+    "sdr",
+    "libplacebo",
+    "glsl"
+  ],
+  "author": "BOOB Player Team",
+  "license": "MIT"
+}

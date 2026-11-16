@@ -1,0 +1,20 @@
+# BOOB Player - Dependencies & Requirements
+# Python 3.10+ recommended
+
+# GUI Framework
+PyQt6>=6.5.0
+
+# Embedded Media Backend (requires libmpv-2.dll, bundled in lib/)
+python-mpv>=1.0.5
+
+# High-Performance Frame & Numerical Processing
+numpy>=1.24.0
+
+# Computer Vision & Hardware Frame Inspection
+opencv-python>=4.8.0
+
+# Network & IPTV Playlist Streaming
+requests>=2.28.0
+
+# Standalone Executable Packaging (cx_Freeze)
+cx_Freeze>=8.0.0

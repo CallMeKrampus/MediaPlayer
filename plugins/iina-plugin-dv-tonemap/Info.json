@@ -1,0 +1,24 @@
+{
+  "name": "Dolby Vision Tonemapper",
+  "identifier": "io.iina.plugin.dv-tonemap",
+  "version": "1.0.0",
+  "description": "Auto-detects Dolby Vision Profile 5 (IPTPQc2) and maps to pristine Rec.709 SDR. Fixes purple/green screens on macOS using hardware GLSL reshaping and libplacebo tuning.",
+  "author": {
+    "name": "BOOB Player Team",
+    "email": "dev@boobplayer.org",
+    "url": "https://github.com/boobplayer/boob-player"
+  },
+  "entry": "main.js",
+  "preferencesPage": "preferences.html",
+  "preferenceDefaults": {
+    "enabled": true,
+    "mode": "auto",
+    "target": "sdr",
+    "algorithm": "clip",
+    "show_osd": true
+  },
+  "permissions": [
+    "show-osd",
+    "file-system"
+  ]
+}

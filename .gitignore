@@ -1,0 +1,106 @@
+# ==============================================================================
+# BOOB Player - Git Ignore Configuration
+# ==============================================================================
+
+# --- Python Bytecode & Runtime Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# --- Build, Packaging & Distribution ---
+build/
+dist/
+*.egg-info/
+BOOB_Player.egg-info/
+*.egg
+*.wheel
+*.spec
+*.manifest
+*.zip
+*.7z
+*.tar.gz
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- IDE & Editor Settings ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# --- Operating System Files ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- Application Logs & Diagnostic Traces ---
+debug_logs/
+*.log
+*.log.*
+mpv_all_logs.txt
+dv_p20_debug.log
+mpv_debug_*.log
+
+# --- Runtime Caches & Temporary Scratch Folders ---
+cache/
+scratch/
+shader_sandbox/
+rpu_libplacebo_test/
+*.tmp
+*.temp
+*.bak
+
+# --- Large Binary Dependencies & Compiled Libraries (>100MB) ---
+# Note: mpv-2.dll and libmpv-2.dll exceed GitHub's 100MB file limit
+lib/*.dll
+lib/*.exe
+*.dll
+*.exe
+*.so
+*.dylib
+
+# --- Heavy Theatrical DCP Packages & Large Test Media Containers ---
+*.mxf
+*.j2k
+*.j2c
+LostWolves-*/
+Ramayana_*/
+SSRajamouliVAR/
+*.mp4
+*.mkv
+*.ts
+*.m2ts
+*.avi
+
+# --- Temporary Frame Dumps & Lossless Screenshots ---
+*.png
+*.jpg
+*.jpeg
+
+# --- Whitelist: Keep Core Repository Test Fixtures & UI Assets ---
+assets/**
+assets/**/*.mov
+assets/**/*.webm
+assets/**/*.wav
+assets/**/*.srt
+assets/**/*.png
+assets/**/*.jpg
+ui/assets/**
+
+# --- Nested Repository Worktree / Clone ---
+MediaPlayer/
