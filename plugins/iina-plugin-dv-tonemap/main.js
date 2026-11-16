@@ -44,7 +44,7 @@ vec4 hook() {
     vec3 lms_pq = vec3(L_pq, M_pq, S_pq);
     vec3 lms_lin = pq_to_linear(lms_pq);
     
-    // LMS to BT.2020 Matrix
+    // LMS to Rec.2020 Matrix
     mat3 lms_to_bt2020 = mat3(
          3.224645, -0.627763,  0.076044,
         -1.748318,  1.678015, -0.284856,
@@ -52,7 +52,7 @@ vec4 hook() {
     );
     vec3 bt2020_lin = max(lms_to_bt2020 * lms_lin, vec3(0.0));
     
-    // BT.2020 to Rec.709 Matrix
+    // Rec.2020 to Rec.709 Matrix
     mat3 bt2020_to_rec709 = mat3(
          1.6605, -0.1246, -0.0182,
         -0.5876,  1.1329, -0.1006,
@@ -266,7 +266,7 @@ function applyDVTonemapping() {
       mpv.set("gamut-mapping-mode", "clip");
       mpv.set("hdr-compute-peak", "no");
     } else {
-      // SDR BT.709
+      // SDR Rec.709
       mpv.set("target-prim", "bt.709");
       mpv.set("target-trc", "auto");
       mpv.set("target-peak", "auto");
@@ -292,7 +292,7 @@ function applyDVTonemapping() {
     console.log(`[DV-Tonemap] Applied: mode=${mode}, target=${target}, algorithm=${algorithm}`);
 
     if (showOSD) {
-      const targetLabel = target === "hdr10" ? "HDR10 (BT.2020 PQ)" : target === "hlg" ? "HLG (BT.2020)" : "Rec.709 SDR";
+      const targetLabel = target === "hdr10" ? "HDR10 (Rec.2020 PQ)" : target === "hlg" ? "HLG (Rec.2020)" : "Rec.709 SDR";
       core.osd(`💎 Dolby Vision P5 → ${targetLabel} Applied`);
     }
   } catch (err) {
@@ -371,8 +371,8 @@ function buildMenu() {
   const targetMenu = menu.item("Target Display");
   const targets = [
     { key: "sdr", label: "Rec.709 SDR (Standard Display)" },
-    { key: "hdr10", label: "HDR10 (BT.2020 PQ)" },
-    { key: "hlg", label: "HLG (BT.2020 HLG)" }
+    { key: "hdr10", label: "HDR10 (Rec.2020 PQ)" },
+    { key: "hlg", label: "HLG (Rec.2020 HLG)" }
   ];
   targets.forEach(t => {
     targetMenu.addSubmenuItem(

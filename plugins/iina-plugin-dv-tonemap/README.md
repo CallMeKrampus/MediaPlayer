@@ -14,12 +14,12 @@ When played on standard Mac players or versions of IINA/mpv without a working DO
 
 ### ✨ What This Plugin Does
 1. **Zero-Lag Auto-Detection**: Monitors stream metadata (`video-params/colormatrix`, `dvh1`/`dvhe` FourCC tags, and track side-data).
-2. **Hardware GLSL Reshaper**: Hooks directly into mpv's GPU render pipeline (`MAIN` hook) to convert IPTPQc2 $\to$ LMS $\to$ BT.2020 $\to$ Rec.709 Linear with calibrated soft-knee tonemapping and sRGB transfer functions.
+2. **Hardware GLSL Reshaper**: Hooks directly into mpv's GPU render pipeline (`MAIN` hook) to convert IPTPQc2 $\to$ LMS $\to$ Rec.2020 $\to$ Rec.709 Linear with calibrated soft-knee tonemapping and sRGB transfer functions.
 3. **libplacebo Optimization**: Sets optimal `tone-mapping=clip`, `target-prim=bt.709`, and `gamut-mapping-mode=clip` to prevent peak dimming.
 4. **Target Color Space Flexibility**:
    * **Rec.709 SDR**: For standard Mac displays (MacBook Air, iMac) and external monitors.
-   * **HDR10 (BT.2020 PQ)**: For MacBook Pro Liquid Retina XDR and Apple Pro Display XDR.
-   * **HLG (BT.2020 HLG)**: For broadcast workflows.
+   * **HDR10 (Rec.2020 PQ)**: For MacBook Pro Liquid Retina XDR and Apple Pro Display XDR.
+   * **HLG (Rec.2020 HLG)**: For broadcast workflows.
 5. **Clean Revert**: Instantly restores default player properties when switching to standard SDR or HDR10 videos.
 
 ---

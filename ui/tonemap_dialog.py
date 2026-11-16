@@ -33,21 +33,21 @@ class TonemapControlDrawer(QWidget):
         "passthrough": "⚡ Pass-Through",
         "dvis_dcp_sdr": "💎 DVis (DCP) → SDR",
         "dvis_dcp_hdr10": "💎 DVis (DCP) → HDR10",
-        "dci_xyz_srgb": "🎬 DCI-XYZ → BT.709",
-        "dv_p5_sdr": "💎 DV P5 → BT.709",
+        "dci_xyz_srgb": "🎬 DCI-XYZ → Rec.709",
+        "dv_p5_sdr": "💎 DV P5 → Rec.709",
         "dv_p5_hdr10": "💎 DV P5 → HDR10",
         "dv_p5_hlg": "💎 DV P5 → HLG",
         "dv_p20_rpu_sdr": "🧬 DV P20 → SDR (RPU L8)",
         "dv_p20_rpu_hdr": "🧬 DV P20 → HDR10/10+ (RPU)",
-        "hlg_sdr": "⚡ HLG → BT.709 (Punch)",
-        "hdr10_sdr": "☀️ HDR10 → BT.709",
-        "hdr10plus_sdr": "🌟 HDR10+ → BT.709",
+        "hlg_sdr": "⚡ HLG → Rec.709 (Punch)",
+        "hdr10_sdr": "☀️ HDR10 → Rec.709",
+        "hdr10plus_sdr": "🌟 HDR10+ → Rec.709",
         "hdr10_hdr": "🖥️ HDR10 → HDR Display",
         "hdr10plus_hdr": "🖥️ HDR10+ → HDR Display",
-        "spline_sdr": "🌊 Spline → BT.709",
-        "filmic_hable": "🎞️ Hable → BT.709",
-        "mobius_sdr": "🌀 Mobius → BT.709",
-        "reinhard_sdr": "📷 Reinhard → BT.709",
+        "spline_sdr": "🌊 Spline → Rec.709",
+        "filmic_hable": "🎞️ Hable → Rec.709",
+        "mobius_sdr": "🌀 Mobius → Rec.709",
+        "reinhard_sdr": "📷 Reinhard → Rec.709",
     }
 
     def __init__(self, tonemap_engine: TonemapEngine, parent=None):
@@ -397,7 +397,7 @@ class TonemapControlDrawer(QWidget):
         top_status_row.addStretch(1)
         status_layout.addLayout(top_status_row)
 
-        self.details_lbl = QLabel("Primaries: BT.709 | TRC: Gamma 2.2 | Algorithm: Clip | Peak: 100 nits")
+        self.details_lbl = QLabel("Primaries: Rec.709 | TRC: Gamma 2.2 | Algorithm: Clip | Peak: 100 nits")
         self.details_lbl.setStyleSheet("color: #71717a; font-size: 10px; font-family: monospace;")
         status_layout.addWidget(self.details_lbl)
 

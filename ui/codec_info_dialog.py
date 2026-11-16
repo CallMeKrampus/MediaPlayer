@@ -124,9 +124,9 @@ class CodecInfoDialog(QDialog):
             elif hdr_fmt == "HDR10+":
                 hdr_display = "Yes (HDR10+ / SMPTE 2094-40 PQ)"
             elif hdr_fmt == "HDR10":
-                hdr_display = "Yes (HDR10 / BT.2020 ST 2084 PQ)"
+                hdr_display = "Yes (HDR10 / Rec.2020 ST 2084 PQ)"
             elif hdr_fmt == "HLG":
-                hdr_display = "Yes (HLG / BT.2020 ARIB STD-B67)"
+                hdr_display = "Yes (HLG / Rec.2020 ARIB STD-B67)"
             elif str(hdr_fmt).startswith("Dolby Vision"):
                 hdr_display = f"Yes ({hdr_fmt})"
             elif v.get("hdr"):
@@ -134,13 +134,13 @@ class CodecInfoDialog(QDialog):
             else:
                 hdr_display = "No (SDR)"
 
-            prim_val = v.get("color_primaries", "BT.709")
+            prim_val = v.get("color_primaries", "Rec.709")
             if prim_val == "dci-p3":
                 prim_val = "DCI-P3 (Cinema Gamut)"
-            trc_val = v.get("color_transfer", "BT.709 / sRGB")
+            trc_val = v.get("color_transfer", "Rec.709 / sRGB")
             if trc_val == "smpte428":
                 trc_val = "SMPTE 428-1 (DCI Gamma 2.6 Theatrical SDR)"
-            matrix_val = v.get("color_space", "BT.709")
+            matrix_val = v.get("color_space", "Rec.709")
             if matrix_val == "xyz":
                 matrix_val = "DCI-XYZ (SMPTE 428-1 CIE 1931)"
 

@@ -1,7 +1,7 @@
 """
 BOOB Player - Dolby Vision / EDR Digital Cinema (DVis DCP) Conversion Dialog
 Interactive Studio Dark UI for transcoding DCI 108-nit XYZ-PQ codestreams
-into Consumer HDR10 (BT.2020 PQ) and Rec.709 SDR deliverables.
+into Consumer HDR10 (Rec.2020 PQ) and Rec.709 SDR deliverables.
 """
 
 import os
@@ -95,7 +95,7 @@ class DVisConverterDialog(QDialog):
         t_layout.setSpacing(8)
 
         self.btn_grp_target = QButtonGroup(self)
-        self.rad_hdr10 = QRadioButton("Consumer HDR10 (BT.2020 PQ, 10-bit) — For 4K HDR TVs, OLEDs & Apple XDR Displays")
+        self.rad_hdr10 = QRadioButton("Consumer HDR10 (Rec.2020 PQ, 10-bit) — For 4K HDR TVs, OLEDs & Apple XDR Displays")
         self.rad_hdr10.setChecked(True)
         self.rad_hdr10.setStyleSheet("color: #e4e4e7; font-size: 12px;")
         self.btn_grp_target.addButton(self.rad_hdr10)

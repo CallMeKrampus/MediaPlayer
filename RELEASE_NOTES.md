@@ -19,11 +19,11 @@
 ### 🎨 Color Science & Dynamic Tonemapping Pipeline
 * **Dolby Vision Profile 20 (MV-HEVC) & Profile 5**:
   * Dynamic RPU Level 1 (scene peak), Level 3 (dynamic offsets), and Level 8 (slope, offset, power, saturation) trim extraction via `dovi_tool` and libplacebo.
-  * Direct BT.709 SDR mapping utilizing algebraic trims without division spikes.
+  * Direct Rec.709 SDR mapping utilizing algebraic trims without division spikes.
 * **HDR10, HDR10+, and HLG Support**:
   * Dynamic tone mapping presets: `BT.2390` (ITU-R standard), `Hable / ACES Filmic`, `Spline`, `Mobius`, `Reinhard`, and `Clip`.
   * Non-linear dynamic target peak selection: 80, 100, 150, 200, 300, 400, 600, and 1000 nits.
-* **Windows 11 Direct HDR Pass-Through (`Ctrl+Shift+H`)**: Signals the Windows display swapchain (`target-colorspace-hint=yes`) for uncompressed BT.2020 PQ pass-through.
+* **Windows 11 Direct HDR Pass-Through (`Ctrl+Shift+H`)**: Signals the Windows display swapchain (`target-colorspace-hint=yes`) for uncompressed Rec.2020 PQ pass-through.
 * **Split-Screen A/B Comparison Wipe (`Ctrl+W`)**: Interactive draggable divider comparing graded/processed video against raw bypass.
 
 ### 🎧 Immersive Audio (SMPTE ST 2098-2 IAB / Atmos) & Spatial Visualizer
@@ -52,8 +52,9 @@
 > **Flat Purple / Red / Green / White Frame — Shader Constant Miscompile in the Bundled libmpv**
 > * **Symptom**: Video opens as a flat or heavily tinted solid colour (purple and red are most common on Dolby Vision Profile 20) while audio, timeline and status bar behave normally. It is decided once per process, is far more likely when a file is opened after the player has sat idle, and survives seeking, preset changes and video output rebuilds.
 > * **Mechanism**: With `vo=gpu-next` on Direct3D 11, libplacebo's GLSL is compiled to SPIR-V inside `mpv-2.dll`. The bundled build intermittently loses the leading characters of float literals with 16+ significant digits (`1.000962257385254` → `0.000962…` or `962257354752.0`; `49.261085510253906` → `0.261…`). Those literals are the P010 sample scale and the PQ scale, and compiled shaders are cached for the life of the video output. Player state is identical between good and bad runs; hardware vs. software decoding makes no difference.
-> * **Mitigation (`core/shader_integrity.py`, `core/mpv_engine.py`)**: The engine reads libmpv's shader dumps and compares the translated HLSL constants against the GLSL literals. On a confirmed miscompile it rebuilds the video output on OpenGL (`gpu-api=opengl`, `gpu-context=win`), where GLSL goes straight to the GPU driver and the affected compiler is never used. The switch is logged as `SHADER_MISCOMPILE` / `SHADER_HEAL` and stays in effect until the player is restarted.
-> * **Cost of the fallback**: Roughly half a second of wrong colour on the first file before the switch; hardware decoding moves from `d3d11va` to `nvdec` (other GPUs fall back to copy-back or software decoding); HDR pass-through is unavailable, so HDR sources are tone-mapped to SDR.
+> * **Mitigation (`core/shader_integrity.py`, `core/mpv_engine.py`)**: The engine reads libmpv's shader dumps and compares the translated HLSL constants against the GLSL literals. On a confirmed miscompile it rebuilds the video output on OpenGL (`gpu-api=opengl`, `gpu-context=win`), where GLSL goes straight to the GPU driver and the affected compiler is never used. The switch stays in effect until the player is restarted.
+> * **No wrong-colour flash**: While the player is still on Direct3D 11, each newly opened file starts under an opaque black mpv OSD overlay. It is removed once the first frame has been presented and the shader compiler has been idle for 150 ms with no miscompile, or about half a second after the OpenGL switch. A 3-second cap guarantees the picture is never left blanked.
+> * **Cost of the fallback**: Opening a file shows black slightly longer (a few tenths of a second on a clean open, up to roughly a second and a half when the renderer has to switch); hardware decoding moves from `d3d11va` to `nvdec` (other GPUs fall back to copy-back or software decoding); HDR pass-through is unavailable, so HDR sources are tone-mapped to SDR.
 > * **Permanent fix**: Replace `lib/mpv-2.dll` / `lib/libmpv-2.dll` with a libmpv build that does not have the defect. The detector stays silent on a healthy build and the player remains on Direct3D 11.
 
 > [!CAUTION]
@@ -67,7 +68,7 @@
 > **The Fluorescent Green / False Color Defect (Unshaped IPTPQc2 Color Matrix)**
 > * **Symptom**: Characters and environments render in an intense, electric fluorescent green tint (green-to-red ratio $> 7:1$).
 > * **Mechanism**: Dolby Vision Profile 20 and Profile 5 use the **IPTPQc2** color space ($I$: Intensity, $P$: Protoc [Green-Magenta], $T$: Tritan [Yellow-Blue]). If raw Protoc chroma passes unshaped without Dolby Vision matrix transforms, or if an erroneous external GLSL shader re-treats converted RGB as IPT, intense green saturation occurs.
-> * **Level 8 Dynamic RPU Extraction**: The engine extracts dynamic Level 1, Level 3, and Level 8 trims in real time via `dovi_tool` using dedicated video stream mapping (`-map 0:v:0 -an -sn -dn`). This maps IPTPQc2 to BT.709 SDR directly using the master grade's trim slope (gain) and power (exponent) without manual shaders or distortion.
+> * **Level 8 Dynamic RPU Extraction**: The engine extracts dynamic Level 1, Level 3, and Level 8 trims in real time via `dovi_tool` using dedicated video stream mapping (`-map 0:v:0 -an -sn -dn`). This maps IPTPQc2 to Rec.709 SDR directly using the master grade's trim slope (gain) and power (exponent) without manual shaders or distortion.
 > * **Protected Opening Logos**: Video timestamps below 5.0 seconds (e.g. Lucasfilm emerald green logo, Disney blue castle) are protected from defect classification, eliminating false-positive restart loops on opening titles.
 
 > [!CAUTION]
@@ -114,7 +115,7 @@ The following features have been implemented in the codebase but **have not yet 
 * **Non-NVIDIA Hardware (AMD Radeon & Intel Arc)**:
   * The `nvjpeg2k` hardware engine specifically leverages CUDA (`nvcuda.dll` / `nvjpeg2k_0.dll`). On AMD RDNA and Intel Arc GPUs, the system falls back to CPU / OpenCL. High-bitrate 4K 48fps HFR DCP playback on non-NVIDIA GPUs under sustained thermal load remains untested.
 * **Multi-Monitor Mixed-DPI & Dynamic SDR/HDR Handoff**:
-  * Dragging an active Dolby Vision or HDR10 playback window across a multi-monitor boundary (e.g. from an SDR BT.709 60Hz display to an HDR10 BT.2020 144Hz display) during live playback has not been verified for D3D11 swapchain re-negotiation.
+  * Dragging an active Dolby Vision or HDR10 playback window across a multi-monitor boundary (e.g. from an SDR Rec.709 60Hz display to an HDR10 Rec.2020 144Hz display) during live playback has not been verified for D3D11 swapchain re-negotiation.
 * **True Physical 16+ Channel Cinema Sound Processors**:
   * Multi-channel IAB and IMAX 12.0 downmixing has been validated on 5.1/7.1 speaker systems and binaural headphones, but physical 16-to-32 discrete channel cinema hardware processors (QSC Q-SYS, Dolby CP950, Trinnov Ovation) via ASIO / WASAPI Exclusive remain untested in commercial theater auditoriums.
 * **Encrypted Commercial DCPs (KDM RSA/AES Decryption)**:

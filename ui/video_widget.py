@@ -389,9 +389,6 @@ class VideoWidget(QWidget):
         self.nv_viewport = NVJPEG2KCanvas(self)
         self.nv_viewport.hide()
 
-        # True while the engine is verifying a newly opened file's shaders
-        self._mpv_concealed = False
-
     def paintEvent(self, ev):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(0, 0, 0))
@@ -410,21 +407,10 @@ class VideoWidget(QWidget):
     def show_mpv_viewport(self):
         """Activate standard mpv presentation surface."""
         self.mpv_viewport.setGeometry(self.rect())
-        if not self._mpv_concealed:
-            self.mpv_viewport.show()
-            self.mpv_viewport.raise_()
+        self.mpv_viewport.show()
+        self.mpv_viewport.raise_()
         self.nv_viewport.hide()
         self.nv_viewport.clear()
-
-    def set_mpv_concealed(self, concealed: bool):
-        """Blank (hide) or reveal the mpv surface; the black widget behind shows through."""
-        self._mpv_concealed = bool(concealed)
-        if self._mpv_concealed:
-            self.mpv_viewport.hide()
-        elif not self.nv_viewport.isVisible():
-            self.mpv_viewport.setGeometry(self.rect())
-            self.mpv_viewport.show()
-            self.mpv_viewport.raise_()
 
     def set_subtitle_engine(self, engine):
         """Bind DCP subtitle engine to the native GPU viewport."""

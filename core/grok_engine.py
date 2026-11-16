@@ -73,7 +73,7 @@ __kernel void xyz_to_rgb_graded(
         }
         rf *= 0.01f; gf *= 0.01f; bf *= 0.01f;
     } else if (preset_mode == 8) {
-        // Mode 8: DVis (DCP) -> Consumer HDR10 (108-nit PQ -> BT.2020)
+        // Mode 8: DVis (DCP) -> Consumer HDR10 (108-nit PQ -> Rec.2020)
         float px = pow(fmax(xf, 0.0f), 1.0f / 78.84375f);
         float py = pow(fmax(yf, 0.0f), 1.0f / 78.84375f);
         float pz = pow(fmax(zf, 0.0f), 1.0f / 78.84375f);

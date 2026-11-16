@@ -61,32 +61,40 @@ def collect_include_files():
     if os.path.isdir(shaders_dir):
         files.append((shaders_dir, "shaders"))
 
-    # 2. Core playback engine DLL (libmpv)
-    # Include single pristine DLL instance to avoid 116MB duplicate file bloat
+    # 2. Core playback engine DLLs (libmpv-2.dll & mpv-2.dll)
     for dll_name in ("libmpv-2.dll", "mpv-2.dll"):
         dll_src = os.path.join(BASE_DIR, "lib", dll_name)
         if os.path.isfile(dll_src):
-            files.append((dll_src, os.path.join("lib", "libmpv-2.dll")))
-            break
+            files.append((dll_src, os.path.join("lib", dll_name)))
 
     # 3. Hardware JPEG 2000 decoder DLL (nvJPEG2000)
     nv_dll = NVJPEG2KEngine._find_nvjpeg2k_dll()
     if nv_dll and os.path.isfile(nv_dll):
         files.append((nv_dll, os.path.join("lib", os.path.basename(nv_dll))))
 
-    # 4. Standalone FFmpeg & FFprobe CLI tools
-    for tool_name in ("ffmpeg", "ffprobe"):
+    # 4. Standalone CLI media tools (FFmpeg, FFprobe, dovi_tool, dav2d, rav2d)
+    for tool_name in ("ffmpeg", "ffprobe", "dovi_tool", "dav2d", "rav2d"):
         tool_src = find_external_tool(tool_name)
         if tool_src and os.path.isfile(tool_src):
-            files.append((tool_src, os.path.join("lib", f"{tool_name}.exe")))
+            files.append((tool_src, os.path.join("lib", f"{os.path.splitext(os.path.basename(tool_src))[0]}.exe")))
 
-    # 5. Complete MSVC C/C++ runtime + D3D/OpenGL software fallback DLLs
+    # 5. Project lib/ directory DLLs, EXEs, PEMs (catch any additional binaries)
+    lib_dir = os.path.join(BASE_DIR, "lib")
+    if os.path.isdir(lib_dir):
+        for f in sorted(os.listdir(lib_dir)):
+            if f.lower().endswith((".dll", ".exe", ".pem")):
+                src_path = os.path.join(lib_dir, f)
+                dst_path = os.path.join("lib", f)
+                if os.path.isfile(src_path) and not any(dst == dst_path for _, dst in files):
+                    files.append((src_path, dst_path))
+
+    # 6. Complete MSVC C/C++ runtime + D3D/OpenGL software fallback DLLs
     for dll_name in REDIST_DLLS:
         dll_src = _find_redist_dll(dll_name)
         if dll_src and os.path.isfile(dll_src):
             files.append((dll_src, os.path.join("lib", dll_name)))
 
-    # 6. TLS/SSL root CA certificates for HTTPS IPTV streams
+    # 7. TLS/SSL root CA certificates for HTTPS IPTV streams
     try:
         import certifi
         cacert = certifi.where()
@@ -106,6 +114,7 @@ build_exe_options = {
         "PyQt6",
         "mpv",
         "numpy",
+        "PIL",
         "requests",
         "certifi",
         "urllib",
@@ -113,6 +122,20 @@ build_exe_options = {
         "json",
         "ctypes",
         "ssl",
+        "hashlib",
+        "shutil",
+        "tempfile",
+        "subprocess",
+        "threading",
+        "multiprocessing",
+        "queue",
+        "dataclasses",
+        "datetime",
+        "math",
+        "bisect",
+        "struct",
+        "collections",
+        "re",
     ],
     "includes": [
         "PyQt6.QtCore",
@@ -120,6 +143,13 @@ build_exe_options = {
         "PyQt6.QtWidgets",
         "PyQt6.QtOpenGL",
         "PyQt6.QtOpenGLWidgets",
+        "PIL.Image",
+        "PIL.ImageOps",
+        # Imported lazily / by name; listed explicitly so they can never be dropped from the bundle
+        "core.shader_integrity",
+        "core.frame_sampler",
+        "core.nvjpeg2k_engine",
+        "core.grok_engine",
     ],
     "excludes": [
         # Prune completely unused 3rd party frameworks & legacy Qt5
@@ -161,7 +191,7 @@ executables = [
         script=os.path.join(BASE_DIR, "boob_player.py"),
         base="gui" if sys.platform == "win32" else None,
         target_name="BOOBPlayer.exe" if sys.platform == "win32" else "BOOBPlayer",
-    )
+    ),
 ]
 
 if __name__ == "__main__":

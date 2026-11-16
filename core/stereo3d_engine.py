@@ -20,7 +20,6 @@ Supports full stereoscopic 3D video playback:
 import os
 import re
 from typing import Optional, Dict, Any, Tuple, List
-from core.debug_logger import DebugLogger
 
 
 class Stereo3DEngine:
@@ -180,14 +179,6 @@ class Stereo3DEngine:
 
         # Unless there are 2 video streams with the same index, media is strictly 2D.
         has_dual = self.check_has_dual_video_streams_same_index(probe_data=probe_data, mpv_tracks=mpv_tracks)
-        DebugLogger.log(
-            "STEREO3D_GATE",
-            f"configure_for_media: has_dual_streams={has_dual}",
-            uri=uri,
-            has_dual=has_dual,
-            has_probe=bool(probe_data),
-            has_mpv_tracks=bool(mpv_tracks)
-        )
         if not has_dual:
             was_enabled = self.enabled
             self.detected_input_format = None
@@ -329,7 +320,6 @@ class Stereo3DEngine:
                     # Append dict form if list of dicts
                     cleaned_vf.append({"name": "stereo3d", "params": {"in": in_code, "out": out_code}})
                     self.player["vf"] = cleaned_vf
-                DebugLogger.log("STEREO3D_FILTER", f"Stereo3D filter ENABLED: {s3d_filter}", vf=self.player["vf"])
             else:
                 has_s3d = False
                 if isinstance(current_vf, list):
@@ -348,8 +338,7 @@ class Stereo3DEngine:
                         self.player["vf"] = ",".join(cleaned_vf)
                     else:
                         self.player["vf"] = cleaned_vf
-                    DebugLogger.log("STEREO3D_FILTER", "Stereo3D filter REMOVED (2D presentation)", vf=self.player["vf"])
                 else:
-                    DebugLogger.log("STEREO3D_FILTER", "Stereo3D filter DISABLED (2D presentation, unchanged)", vf=current_vf)
+                    pass
         except Exception:
             pass

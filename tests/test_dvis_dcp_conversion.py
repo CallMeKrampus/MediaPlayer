@@ -63,11 +63,11 @@ class TestDVisDCPConversion(unittest.TestCase):
         # In CIE 1931: X = 0.95047, Y = 1.00000, Z = 1.08883
         xyz_d65 = np.array([0.95047, 1.00000, 1.08883], dtype=np.float32)
 
-        # 1. Test D65 -> BT.709: Should map cleanly to [1.0, 1.0, 1.0]
+        # 1. Test D65 -> Rec.709: Should map cleanly to [1.0, 1.0, 1.0]
         rgb709 = xyz_d65 @ XYZ_TO_709.T
         np.testing.assert_allclose(rgb709, [1.0, 1.0, 1.0], atol=1e-3)
 
-        # 2. Test D65 -> BT.2020: Should map cleanly to [1.0, 1.0, 1.0]
+        # 2. Test D65 -> Rec.2020: Should map cleanly to [1.0, 1.0, 1.0]
         rgb2020 = xyz_d65 @ XYZ_TO_2020.T
         np.testing.assert_allclose(rgb2020, [1.0, 1.0, 1.0], atol=1e-3)
 

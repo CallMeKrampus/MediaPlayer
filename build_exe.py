@@ -1,16 +1,21 @@
 """
-BOOB Player - Non-PyInstaller Portable Packaging & Pre-Flight Build Verification Tool (cx_Freeze)
+BOOB Player - Standalone Portable Packaging & Pre-Flight Build Verification Tool (cx_Freeze)
 Usage:
-    python build_exe.py --check   # Verify cx_Freeze config, tools, DLLs, and zero DCP/media bundling
-    python build_exe.py --build   # Build standalone portable executable into dist/BOOBPlayer
+    python build_exe.py --check        # Verify cx_Freeze config, tools, DLLs, and zero DCP/media bundling
+    python build_exe.py --build        # Build standalone portable executable into dist/BOOBPlayer
+    python build_exe.py --archive      # Pack dist/BOOBPlayer into ultra-compact distribution archive (.7z / .zip)
+    python build_exe.py --smoke-test   # Launch the built exe (must show its main window, no startup error)
+    python build_exe.py --clean        # Clean previous build and dist artifacts
 """
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
-from typing import Optional
+import time
+from typing import Optional, List, Tuple
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -21,9 +26,13 @@ FORBIDDEN_EXTS = (".mxf", ".mov", ".webm", ".mp4", ".mkv", ".wav")
 REQUIRED_DESTS = (
     "shaders",
     "lib/libmpv-2.dll",
+    "lib/mpv-2.dll",
     "lib/nvjpeg2k_0.dll",
     "lib/ffmpeg.exe",
     "lib/ffprobe.exe",
+    "lib/dovi_tool.exe",
+    "lib/dav2d.exe",
+    "lib/rav2d.exe",
     "lib/cacert.pem",
     "lib/vcruntime140.dll",
     "lib/msvcp140.dll",
@@ -32,8 +41,53 @@ REQUIRED_DESTS = (
 )
 
 
+REQUIRED_CORE_MODULES = (
+    "core/shader_integrity.py",   # libmpv shader miscompile detector + OpenGL fallback trigger
+    "core/frame_sampler.py",      # render-defect watchdog sampler
+)
+REMOVED_CORE_MODULES = ("core/debug_logger.py",)  # wrote to sys.stderr, which is None in the windowed exe
+
+# The windowed (cx_Freeze "gui") executable starts with sys.stdout and sys.stderr set to None,
+# so any direct write raises AttributeError and aborts startup with a modal error dialog.
+_UNSAFE_STREAM_USE = re.compile(
+    r"sys\.(stderr|stdout)\.(write|flush|buffer)|file\s*=\s*sys\.(stderr|stdout)|DebugLogger|core\.debug_logger"
+)
+
+
+def check_runtime_sources() -> List[str]:
+    """Static checks on the files that get frozen into the app."""
+    errors: List[str] = []
+    for rel in REQUIRED_CORE_MODULES:
+        if not os.path.isfile(os.path.join(BASE_DIR, rel)):
+            errors.append(f"Missing required module: {rel}")
+    for rel in REMOVED_CORE_MODULES:
+        if os.path.isfile(os.path.join(BASE_DIR, rel)):
+            errors.append(f"Removed module is back and would be frozen into the app: {rel}")
+
+    sources = [os.path.join(BASE_DIR, "boob_player.py")]
+    for sub in ("core", "ui"):
+        d = os.path.join(BASE_DIR, sub)
+        if os.path.isdir(d):
+            sources += [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith(".py")]
+    for path in sources:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    if line.lstrip().startswith("#"):
+                        continue
+                    if _UNSAFE_STREAM_USE.search(line):
+                        rel = os.path.relpath(path, BASE_DIR)
+                        errors.append(
+                            f"{rel}:{lineno}: writes to sys.stderr/stdout or uses the removed debug logger "
+                            f"(both are None in the windowed exe): {line.strip()[:90]}"
+                        )
+        except OSError as e:
+            errors.append(f"Cannot read {path}: {e}")
+    return errors
+
+
 def verify_packaging_readiness() -> int:
-    """Validate that cx_Freeze (not PyInstaller) bundles all runtime tools and excludes DCPs/media."""
+    """Validate that cx_Freeze bundles all runtime tools and excludes DCPs/media."""
     import cx_Freeze
     import setup as pkg_setup
 
@@ -59,14 +113,25 @@ def verify_packaging_readiness() -> int:
         if norm_src.endswith(FORBIDDEN_EXTS) or norm_dst.endswith(FORBIDDEN_EXTS):
             errors.append(f"Forbidden media file included: {src} -> {dst}")
 
+    # Check shader directory contents
+    shaders_src = os.path.join(BASE_DIR, "shaders")
+    if not os.path.isdir(shaders_src):
+        errors.append(f"Missing shaders directory: {shaders_src}")
+    else:
+        glsl_count = len([f for f in os.listdir(shaders_src) if f.endswith(".glsl")])
+        if glsl_count < 10:
+            errors.append(f"Insufficient GLSL shaders found in {shaders_src}: found {glsl_count}, expected >= 10")
+
     script_path = os.path.join(BASE_DIR, "boob_player.py")
     if not os.path.isfile(script_path):
         errors.append(f"Missing entry script: {script_path}")
 
+    errors.extend(check_runtime_sources())
+
     print(f"[Packaging] Engine: cx_Freeze {cx_Freeze.__version__} (PyInstaller excluded)")
-    print(f"[Packaging] Target Executable: {pkg_setup.executables[0].target_name}")
+    print(f"[Packaging] Target GUI Executable: {pkg_setup.executables[0].target_name}")
     print(f"[Packaging] Output Directory: {pkg_setup.build_exe_options['build_exe']}")
-    for src, dst in include_files:
+    for src, dst in sorted(include_files, key=lambda x: x[1]):
         print(f"[Packaging] Asset: {dst} <- {src}")
 
     if errors:
@@ -78,20 +143,139 @@ def verify_packaging_readiness() -> int:
     return 0
 
 
-def run_build(archive_after: bool = False) -> int:
+def clean_build_artifacts() -> None:
+    """Remove previous build and dist directories."""
+    for folder in ("build", os.path.join("dist", "BOOBPlayer")):
+        p = os.path.join(BASE_DIR, folder)
+        if os.path.isdir(p):
+            print(f"[Packaging] Cleaning: {p}")
+            shutil.rmtree(p, ignore_errors=True)
+
+
+GUI_ERROR_DIALOG_TITLES = (
+    "cx_Freeze: Python error in main script",
+    "cx_Freeze: Python error in startup script",
+)
+GUI_MAIN_WINDOW_TITLE = "BOOB Player"
+
+
+def _top_level_window_titles() -> List[str]:
+    """Titles of all visible top-level windows (Windows only)."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    titles: List[str] = []
+    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def _cb(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                titles.append(buf.value)
+        return True
+
+    user32.EnumWindows(enum_proc(_cb), 0)
+    return titles
+
+
+def run_gui_smoke_test(base_dist: str, timeout: float = 25.0) -> int:
+    """
+    Launch the windowed executable (sys.stderr/sys.stdout are None there) and require its
+    main window to appear. A startup exception shows a modal cx_Freeze error dialog and the
+    process stays alive, so the dialog title is checked as well as the process state.
+    """
+    if sys.platform != "win32":
+        return 0
+    exe = os.path.join(base_dist, "BOOBPlayer.exe")
+    if not os.path.isfile(exe):
+        print(f"[SmokeTest] ERROR: GUI executable not found: {exe}", file=sys.stderr)
+        return 1
+
+    print(f"[SmokeTest] Launching windowed executable: {exe}")
+    proc = subprocess.Popen(
+        [exe], cwd=base_dist, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                print(f"[SmokeTest] FAILED: GUI executable exited during startup with code {proc.returncode}.", file=sys.stderr)
+                return 1
+            titles = _top_level_window_titles()
+            bad = [t for t in titles if t in GUI_ERROR_DIALOG_TITLES]
+            if bad:
+                print(f"[SmokeTest] FAILED: startup error dialog shown: '{bad[0]}'", file=sys.stderr)
+                return 1
+            if any(t.startswith(GUI_MAIN_WINDOW_TITLE) for t in titles):
+                time.sleep(2.0)  # let deferred startup work run, then re-check
+                titles = _top_level_window_titles()
+                if proc.poll() is None and not any(t in GUI_ERROR_DIALOG_TITLES for t in titles):
+                    print("[SmokeTest] PASS: windowed executable started and showed its main window.")
+                    return 0
+                print("[SmokeTest] FAILED: windowed executable failed right after showing its window.", file=sys.stderr)
+                return 1
+        print(f"[SmokeTest] FAILED: main window did not appear within {timeout:.0f}s.", file=sys.stderr)
+        return 1
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+
+def run_smoke_test(dist_dir: str = "") -> int:
+    """Run non-blocking startup smoke test on the built standalone executable."""
+    base_dist = dist_dir or os.path.join(BASE_DIR, "dist", "BOOBPlayer")
+    return run_gui_smoke_test(base_dist)
+
+
+def run_build(archive_after: bool = False, clean_first: bool = False) -> int:
     """Invoke setup.py build_exe to generate the standalone portable executable bundle."""
+    if clean_first:
+        clean_build_artifacts()
+
     rc = verify_packaging_readiness()
     if rc != 0:
         return rc
 
     cmd = [sys.executable, os.path.join(BASE_DIR, "setup.py"), "build_exe"]
     print(f"[Packaging] Running: {' '.join(cmd)}")
+    t0 = time.time()
     proc = subprocess.run(cmd, cwd=BASE_DIR)
     if proc.returncode != 0:
+        print(f"[Packaging] ERROR: Build failed with exit code {proc.returncode}", file=sys.stderr)
         return proc.returncode
+    build_dur = time.time() - t0
+    print(f"[Packaging] Compilation and packaging finished in {build_dur:.1f}s.")
+
+    # Post-build validation and file integrity checks
+    dist_dir = os.path.join(BASE_DIR, "dist", "BOOBPlayer")
+    lib_dist = os.path.join(dist_dir, "lib")
+
+    # Ensure mpv-2.dll and libmpv-2.dll symmetry
+    f1 = os.path.join(lib_dist, "libmpv-2.dll")
+    f2 = os.path.join(lib_dist, "mpv-2.dll")
+    if os.path.isfile(f1) and not os.path.isfile(f2):
+        shutil.copyfile(f1, f2)
+        print("[Packaging] Post-build: Created mpv-2.dll from libmpv-2.dll")
+    elif os.path.isfile(f2) and not os.path.isfile(f1):
+        shutil.copyfile(f2, f1)
+        print("[Packaging] Post-build: Created libmpv-2.dll from mpv-2.dll")
+
+    # Post-build smoke test
+    smoke_rc = run_smoke_test(dist_dir)
+    if smoke_rc != 0:
+        print("[Packaging] ERROR: Post-build smoke test failed; the build is not usable, skipping archive.", file=sys.stderr)
+        return smoke_rc
 
     if archive_after:
-        return create_compressed_archive()
+        return create_compressed_archive(dist_dir=dist_dir)
     return 0
 
 
@@ -110,7 +294,6 @@ def find_7z_executable() -> Optional[str]:
 def create_compressed_archive(dist_dir: str = "", output_archive: str = "") -> int:
     """Pack dist/BOOBPlayer into an ultra-compressed portable distribution archive (.7z or .zip)."""
     import zipfile
-    import time
 
     base_dist = dist_dir or os.path.join(BASE_DIR, "dist", "BOOBPlayer")
     if not os.path.isdir(base_dist):
@@ -187,12 +370,21 @@ def main():
     parser.add_argument("--check", action="store_true", help="Verify cx_Freeze packaging configuration and assets")
     parser.add_argument("--build", action="store_true", help="Build standalone portable executable in dist/BOOBPlayer")
     parser.add_argument("--archive", action="store_true", help="Compress dist/BOOBPlayer into ultra-compact distribution archive (.7z / .zip)")
+    parser.add_argument("--smoke-test", action="store_true", help="Run automated startup smoke test on built executable")
+    parser.add_argument("--clean", action="store_true", help="Clean previous build and dist directories")
     args = parser.parse_args()
 
+    if args.clean:
+        clean_build_artifacts()
+        if not (args.build or args.check or args.archive or args.smoke_test):
+            return 0
+
     if args.build:
-        sys.exit(run_build(archive_after=args.archive))
+        sys.exit(run_build(archive_after=args.archive, clean_first=args.clean))
     elif args.archive:
         sys.exit(create_compressed_archive())
+    elif args.smoke_test:
+        sys.exit(run_smoke_test())
     else:
         sys.exit(verify_packaging_readiness())
 

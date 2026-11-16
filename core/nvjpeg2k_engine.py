@@ -129,7 +129,7 @@ PTX_XYZ_TO_RGB = """
     setp.eq.u32 %p_dvis_sdr, %p_mode, 7;
     @%p_dvis_sdr bra DVIS_SDR_BRANCH;
 
-    // Mode 8: DVis (DCP) -> Consumer HDR10 (108 nits PQ -> BT.2020)
+    // Mode 8: DVis (DCP) -> Consumer HDR10 (108 nits PQ -> Rec.2020)
     setp.eq.u32 %p_dvis_hdr10, %p_mode, 8;
     @%p_dvis_hdr10 bra DVIS_HDR10_BRANCH;
 
@@ -1607,6 +1607,7 @@ class NVJPEG2KPlaybackController(QObject):
         directly to the NVIDIA GPU JPEG 2000 cinema decoding pipeline in real time.
         """
         with self._cache_lock:
+            grading_before = dict(self.grading_params)
             preset = status.get("preset", "dci_xyz_srgb")
             is_epiq = bool(status.get("is_epiq", False))
             algo = status.get("algorithm", "clip")
@@ -1618,7 +1619,7 @@ class NVJPEG2KPlaybackController(QObject):
             # 3: Hable / ACES Filmic curve
             # 6: Reinhard curve
             # 7: DVis (DCP) -> Rec.709 SDR (108 nits PQ -> 100 nits SDR)
-            # 8: DVis (DCP) -> Consumer HDR10 (108 nits PQ -> BT.2020)
+            # 8: DVis (DCP) -> Consumer HDR10 (108 nits PQ -> Rec.2020)
             if preset in ("dvis_dcp_sdr", "dvis_sdr"):
                 mode = 7
                 k1, k2 = 0.0, 0.0
@@ -1670,8 +1671,13 @@ class NVJPEG2KPlaybackController(QObject):
             target_idx = self.current_frame_idx
             pts = self.current_pts
             grading_snapshot = dict(self.grading_params)
-            self._next_reel_cache.clear()
-            self._next_reel_decode_idx = 0
+            # Pre-decoded next-reel frames were graded with the old parameters, so they are
+            # only stale if the grading actually changed. play_dcp_reel re-applies the same
+            # status on every reel switch; discarding the cache then forced a synchronous
+            # decode of frame 0 (~50 ms) at exactly the moment the reel boundary is crossed.
+            if self.grading_params != grading_before:
+                self._next_reel_cache.clear()
+                self._next_reel_decode_idx = 0
             if redecode_now and mxf_path:
                 self._seek_gen += 1
                 gen = self._seek_gen

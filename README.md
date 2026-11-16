@@ -38,14 +38,14 @@ Engineered with a refined Minimalist Studio Dark aesthetic (`#0d0e12`), **BOOB P
 ### 2. 🎨 Color Science & Advanced Tonemapping Engine
 * **NVIDIA nvJPEG2000 CUDA PTX Assembly Shader**:
   * Custom assembly PTX kernel (`xyz_to_rgb_graded`) running directly on GPU stream multiprocessors.
-  * **Theatrical DCI-XYZ (SMPTE 428-1 Gamma 2.6) -> BT.709 / sRGB Conversion** matrix:
+  * **Theatrical DCI-XYZ (SMPTE 428-1 Gamma 2.6) -> Rec.709 / sRGB Conversion** matrix:
     $$\begin{bmatrix} R \\ G \\ B \end{bmatrix} = \begin{bmatrix} 3.2404542 & -1.5371385 & -0.4985314 \\ -0.9692660 & 1.8760108 & 0.0415560 \\ 0.0556434 & -0.2040259 & 1.0572252 \end{bmatrix} \times \begin{bmatrix} X / 4095.0 \\ Y / 4095.0 \\ Z / 4095.0 \end{bmatrix}^{2.6}$$
   * **EPIQ PLF Laser Cinema Calibration**: Calibrated red-boost scaling ($R_f \times 0.86$) reproducing high-contrast theatrical laser projection.
 * **3D LUT Calibration Support (`.cube` / `.3dl`, `Ctrl+L`)**:
   * Load professional 3D Look-Up Tables for reference studio monitors or film-print emulations (Kodak 2383 / Fuji 3513).
   * Direct zero-overhead hardware application via mpv `gpu-next` and OpenGL presentation stage.
 * **Windows 11 Direct HDR Pass-Through (`Ctrl+Shift+H`)**:
-  * Automatically signals the Windows 11 HDR swapchain (`target-colorspace-hint=yes`), outputting native BT.2020 PQ directly to HDR displays without SDR clipping or unwanted re-quantization.
+  * Automatically signals the Windows 11 HDR swapchain (`target-colorspace-hint=yes`), outputting native Rec.2020 PQ directly to HDR displays without SDR clipping or unwanted re-quantization.
 * **Split-Screen A/B Comparison Wipe Tool (`Ctrl+W`)**:
   * Interactive vertical divider wipe (0% to 100% position) comparing processed/graded video against raw original bypass.
   * Draggable center handle directly on the video viewport with neon status indicators.

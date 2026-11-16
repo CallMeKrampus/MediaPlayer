@@ -15,7 +15,6 @@ from PyQt6.QtCore import Qt
 from ui.main_window import MainWindow
 from core.dcp_parser import DCPParser
 from core.app_paths import ensure_portable_environment
-from core.debug_logger import DebugLogger
 
 
 def parse_args():
@@ -37,7 +36,6 @@ def parse_args():
 def main():
     multiprocessing.freeze_support()
     ensure_portable_environment()
-    DebugLogger.start_session()
     if sys.platform == "win32":
         try:
             import ctypes
@@ -46,18 +44,6 @@ def main():
             pass
 
     args = parse_args()
-    DebugLogger.log(
-        "APP_STARTUP",
-        "BOOB Player process initialized",
-        args_media=args.media,
-        args_tonemap=args.tonemap,
-        args_dcp=args.dcp,
-        args_iptv=args.iptv,
-        args_sub=args.sub,
-        args_audio=args.audio,
-        args_fullscreen=args.fullscreen,
-        pid=os.getpid()
-    )
 
     # Enable High-DPI scaling with unscaled pass-through rounding
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"

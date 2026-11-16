@@ -128,6 +128,37 @@ class TestShaderIntegrityMonitor(unittest.TestCase):
         self.assertEqual(monitor.miscompile_count, 1)
 
 
+class TestCompileActivityTracking(unittest.TestCase):
+    """The engine keeps the picture blanked until the shader compiler is idle."""
+
+    def setUp(self):
+        self.monitor = ShaderIntegrityMonitor()
+
+    def feed(self, text):
+        self.monitor.feed("debug", LIBPLACEBO_LOG_PREFIX, text)
+
+    def test_idle_monitor_is_quiet(self):
+        self.assertTrue(self.monitor.is_quiet(0.15))
+
+    def test_not_quiet_while_a_compile_is_in_flight(self):
+        self.feed("fragment shader source:")
+        self.assertTrue(self.monitor.compile_in_flight)
+        self.assertFalse(self.monitor.is_quiet(0.0))
+
+    def test_not_quiet_right_after_a_compile_finishes(self):
+        self.feed("fragment shader source:")
+        self.feed("Spent 2.023 ms translating HLSL to DXBC")
+        self.assertFalse(self.monitor.compile_in_flight)
+        self.assertEqual(self.monitor.compiles_done, 1)
+        self.assertFalse(self.monitor.is_quiet(60.0))
+        self.assertTrue(self.monitor.is_quiet(0.0))
+
+    def test_reset_clears_in_flight_compile(self):
+        self.feed("vertex shader source:")
+        self.monitor.reset()
+        self.assertFalse(self.monitor.compile_in_flight)
+
+
 class TestSdrOutputOnlyOverride(unittest.TestCase):
     def tearDown(self):
         TonemapEngine.sdr_output_only = False

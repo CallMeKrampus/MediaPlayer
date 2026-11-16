@@ -23,7 +23,6 @@ except Exception:
 # Locate and configure libmpv DLL path before importing mpv
 # Prioritize local project lib/ with latest full-featured libmpv build (source or frozen)
 from core.app_paths import ensure_portable_environment, get_app_base_dir, get_lib_dir
-from core.debug_logger import DebugLogger
 
 ensure_portable_environment()
 
@@ -67,6 +66,7 @@ from core.iab_engine import IABEngine, IABTrackMetadata, IABSpatialObject
 from core.nvjpeg2k_engine import NVJPEG2KEngine, NVJPEG2KPlaybackController, is_gpu_jp2k_available
 from core.stereo3d_engine import Stereo3DEngine
 from core.shader_integrity import ShaderIntegrityMonitor
+from core.frame_sampler import FrameSampler
 
 
 class MPVSignalBridge(QObject):
@@ -88,7 +88,6 @@ class MPVSignalBridge(QObject):
     eof_signal = pyqtSignal(int)
     defect_detected_signal = pyqtSignal(str, float)
     shader_miscompile_signal = pyqtSignal(dict)
-    video_conceal_signal = pyqtSignal(bool)
 
 
 class MPVEngine:
@@ -184,7 +183,7 @@ class MPVEngine:
         # Video stays blanked from loadfile until its shaders are verified
         self._video_concealed: bool = False
         self._conceal_started: float = 0.0
-        self._conceal_params_time: Optional[float] = None
+        self._conceal_first_frame_time: Optional[float] = None
         self._conceal_reveal_at: Optional[float] = None
         self.bridge.shader_miscompile_signal.connect(self._handle_shader_miscompile)
 
@@ -213,8 +212,17 @@ class MPVEngine:
                 self.nv_controller.apply_tonemap_status(status, redecode_now=redecode)
             except Exception as e:
                 print(f"[MPVEngine] Error applying tonemap to nv_controller: {e}")
+        elif self.player and not getattr(self, "gpu_fallback_active", False):
+            # A colour pipeline change recompiles shaders; watch that compile for corruption too
+            self._shader_watch_on()
+            if getattr(self, "is_paused", False):
+                # For standard mpv playback when paused, trigger immediate repaint so tonemap shifts instantly
+                try:
+                    self.player.command("seek", 0, "relative", "exact")
+                except Exception:
+                    pass
         elif self.player and getattr(self, "is_paused", False):
-            # For standard mpv playback when paused, trigger immediate repaint so tonemap shifts instantly
+            # (OpenGL fallback active) repaint so tonemap shifts instantly
             try:
                 self.player.command("seek", 0, "relative", "exact")
             except Exception:
@@ -286,21 +294,6 @@ class MPVEngine:
                 or (detected in ("HDR10", "HLG") and curr_src in ("HDR", "SDR"))
             )
 
-        DebugLogger.log(
-            "AUTO_DETECT_HDR",
-            f"Auto-detect evaluation -> detected='{detected}', should_apply={should_apply}",
-            detected=detected,
-            current_preset=curr_preset,
-            current_source=curr_src,
-            is_auto_mode=is_auto_mode,
-            should_apply=should_apply,
-            has_probe_track=bool(probe_track),
-            has_mpv_tracks=bool(mpv_tracks),
-            has_mpv_video_params=bool(mpv_video_params),
-            mpv_colormatrix=mpv_video_params.get("colormatrix") if isinstance(mpv_video_params, dict) else None,
-            mpv_primaries=mpv_video_params.get("primaries") if isinstance(mpv_video_params, dict) else None,
-            mpv_gamma=mpv_video_params.get("gamma") if isinstance(mpv_video_params, dict) else None,
-        )
 
         if detected in ("SDR", "DCI-XYZ"):
             return
@@ -309,7 +302,6 @@ class MPVEngine:
             return
 
         if should_apply:
-            DebugLogger.log("AUTO_DETECT_HDR", f"Applying auto_configure_for_source('{detected}')")
             self.tonemap_engine.auto_configure_for_source(detected)
 
     def _on_color_adjustments_change(self, brightness: int, contrast: int, saturation: int, gamma: int, hue: int):
@@ -342,7 +334,6 @@ class MPVEngine:
         Verify that libmpv, hardware/software decoders, and the video output pipeline (vo=gpu-next)
         are properly initialized, responsive, and ready before accepting media load commands.
         """
-        DebugLogger.log("DECODER_PRECHECK", "Running decoder & VO pipeline readiness handshake...")
         app = QApplication.instance()
         if app:
             try:
@@ -351,7 +342,6 @@ class MPVEngine:
                 pass
 
         if not self.player:
-            DebugLogger.log("DECODER_PRECHECK", "Player instance is None. Initializing mpv...")
             self._init_mpv()
 
         start_t = time.time()
@@ -365,10 +355,9 @@ class MPVEngine:
                             self.player["hwdec"] = "auto-safe"
                     except Exception:
                         pass
-                    DebugLogger.log("DECODER_PRECHECK", "Decoders and VO confirmed ready", vo=str(vo_val), hwdec=str(hwdec_val))
                     return True
             except Exception as e:
-                DebugLogger.log("DECODER_PRECHECK_WAIT", f"Waiting for decoder pipeline: {e}")
+                pass
             if app:
                 try:
                     app.processEvents()
@@ -376,13 +365,11 @@ class MPVEngine:
                     pass
             time.sleep(0.05)
 
-        DebugLogger.log("DECODER_PRECHECK_FAIL", "Decoders unready after timeout, forcing engine reinitialization")
         self.reinit_player()
         return bool(self.player is not None)
 
     def reinit_player(self):
         """Cleanly tear down and reinitialize the underlying libmpv instance and pipelines."""
-        DebugLogger.log("REINIT_PLAYER", "Cleanly reinitializing mpv player and decoder pipelines...")
         if self.player:
             try:
                 self.player.command("stop")
@@ -399,7 +386,6 @@ class MPVEngine:
         if self.tonemap_engine:
             self.tonemap_engine.on_adjustments_change = self._on_color_adjustments_change
             self.tonemap_engine.on_preset_change = self._on_tonemap_preset_change
-        DebugLogger.log("REINIT_PLAYER", "mpv player and decoder pipelines successfully reinitialized")
 
     # Shader compiles must have been idle this long before the picture is shown
     CONCEAL_QUIET_SECS = 0.15
@@ -407,6 +393,8 @@ class MPVEngine:
     CONCEAL_FALLBACK_SETTLE_SECS = 0.5
     # Never keep the picture blanked longer than this
     CONCEAL_MAX_SECS = 3.0
+    CONCEAL_OVERLAY_ID = 57
+    CONCEAL_OVERLAY_ASS = r"{\an7\pos(0,0)\bord0\shad0\1c&H000000&\1a&H00&\p1}m 0 0 l 4000 0 4000 4000 0 4000{\p0}"
 
     def _begin_video_conceal(self):
         """
@@ -415,19 +403,43 @@ class MPVEngine:
         surface is revealed once the compiles finish clean, or once the OpenGL
         fallback has taken over.
         """
-        if self.gpu_fallback_active or not self.player:
+        if not self.SHADER_WATCH_ENABLED or getattr(self, "gpu_fallback_active", True) or not self.player:
             return
+        if not self._set_video_cover(True):
+            return
+        self._shader_watch_on(hold=1.0)
         self._video_concealed = True
         self._conceal_started = time.monotonic()
-        self._conceal_params_time = None
+        self._conceal_first_frame_time = None
         self._conceal_reveal_at = None
-        self._safe_emit("video_conceal_signal", True)
         QTimer.singleShot(40, self._poll_video_conceal)
 
     def _end_video_conceal(self):
-        if self._video_concealed:
+        if getattr(self, "_video_concealed", False):
             self._video_concealed = False
-            self._safe_emit("video_conceal_signal", False)
+            self._set_video_cover(False)
+
+    def _set_video_cover(self, enabled: bool) -> bool:
+        """
+        Draw (or remove) an opaque black rectangle over the whole picture as an mpv
+        OSD overlay. It lives inside the renderer, so there is no window flicker,
+        shaders keep compiling underneath, and it survives a video output rebuild.
+        """
+        if not self.player:
+            return False
+        try:
+            self.player.command(
+                "osd-overlay",
+                id=self.CONCEAL_OVERLAY_ID,
+                format="ass-events" if enabled else "none",
+                data=self.CONCEAL_OVERLAY_ASS if enabled else "",
+                res_x=1280,
+                res_y=720,
+                z=1000,
+            )
+            return True
+        except Exception as e:
+            return False
 
     def _poll_video_conceal(self):
         if not self._video_concealed:
@@ -440,15 +452,68 @@ class MPVEngine:
             pass  # switching renderer; wait for it
         elif self._conceal_reveal_at is not None:
             reveal = now >= self._conceal_reveal_at
-        elif self._conceal_params_time is not None:
+        elif self._conceal_first_frame_time is not None:
             reveal = (
-                now - self._conceal_params_time >= self.CONCEAL_QUIET_SECS
+                now - self._conceal_first_frame_time >= self.CONCEAL_QUIET_SECS
                 and self.shader_monitor.is_quiet(self.CONCEAL_QUIET_SECS)
             )
         if reveal:
             self._end_video_conceal()
         else:
             QTimer.singleShot(40, self._poll_video_conceal)
+
+    # --- Shader watch window -------------------------------------------------------------
+    # libplacebo's shader dumps are only needed while shaders are being compiled (a file
+    # opens, or the colour pipeline changes). Debug logging stays off the rest of the time,
+    # because mpv formatting and delivering it to Python slowed content switching 3-6x.
+    # Master switch for libmpv log access (shader miscompile detection, the OpenGL fallback
+    # and the black overlay at file open). OFF: any libmpv log hook, even a windowed one,
+    # made switching content freeze the UI for seconds, so mpv is created without one.
+    SHADER_WATCH_ENABLED = False
+    SHADER_WATCH_MSG_LEVEL = "all=no,vo/gpu-next/libplacebo=debug"
+    SHADER_WATCH_MIN_SECS = 2.5
+
+    def _shader_watch_on(self, hold: Optional[float] = None):
+        """Start (or extend) the window in which libplacebo shader dumps are delivered."""
+        # On the OpenGL fallback there is nothing left to detect (no GLSL -> SPIR-V step)
+        if not self.SHADER_WATCH_ENABLED or not self.player or getattr(self, "gpu_fallback_active", False):
+            return
+        until = time.monotonic() + (hold if hold is not None else self.SHADER_WATCH_MIN_SECS)
+        self._shader_watch_until = max(getattr(self, "_shader_watch_until", 0.0), until)
+        if getattr(self, "_shader_watch_active", False):
+            return
+        try:
+            self.player["msg-level"] = self.SHADER_WATCH_MSG_LEVEL
+            self.player.set_loglevel("debug")
+        except Exception:
+            return
+        self._shader_watch_active = True
+        QTimer.singleShot(250, self._shader_watch_tick)
+
+    def _shader_watch_tick(self):
+        if not getattr(self, "_shader_watch_active", False):
+            return
+        if getattr(self, "gpu_fallback_active", False):
+            self._shader_watch_off()
+            return
+        if (
+            time.monotonic() >= self._shader_watch_until
+            and not self._video_concealed
+            and self.shader_monitor.is_quiet(0.4)
+        ):
+            self._shader_watch_off()
+        else:
+            QTimer.singleShot(250, self._shader_watch_tick)
+
+    def _shader_watch_off(self):
+        self._shader_watch_active = False
+        if not self.player:
+            return
+        try:
+            self.player.set_loglevel("no")
+            self.player["msg-level"] = "all=no"
+        except Exception:
+            pass
 
     def _on_mpv_log(self, level: str, prefix: str, text: str):
         """libmpv log callback (mpv event thread). Must stay cheap."""
@@ -478,11 +543,6 @@ class MPVEngine:
         if info.get("generation") != self.shader_monitor.generation:
             return  # report about a video output that was already rebuilt
         self._shader_heal_pending = True
-        DebugLogger.log(
-            "SHADER_MISCOMPILE",
-            "libmpv miscompiled a shader constant on Direct3D 11; switching renderer to OpenGL",
-            **info,
-        )
         # Let the current burst of shader compiles finish before tearing down
         QTimer.singleShot(250, self._activate_gpu_fallback)
 
@@ -492,6 +552,7 @@ class MPVEngine:
             if not self.player:
                 return
             self.shader_monitor.reset()
+            self._shader_watch_off()
             was_paused = bool(getattr(self.player, "pause", False))
             hdr_output_was_active = bool(getattr(self.tonemap_engine, "display_is_hdr", False))
 
@@ -512,20 +573,15 @@ class MPVEngine:
                     else:
                         self.tonemap_engine.apply_preset(self.tonemap_engine.current_preset)
                 except Exception as e:
-                    DebugLogger.log("SHADER_HEAL_ERROR", f"Failed to reconfigure color pipeline for SDR output: {e}")
+                    pass
 
             if was_paused:
                 try:
                     self.player.command("seek", 0, "relative", "exact")
                 except Exception:
                     pass
-            DebugLogger.log(
-                "SHADER_HEAL",
-                "Video output rebuilt on OpenGL; affected shader compiler is no longer used",
-                **self.GPU_FALLBACK_OPTS,
-            )
         except Exception as e:
-            DebugLogger.log("SHADER_HEAL_ERROR", f"Failed to switch renderer to OpenGL: {e}")
+            pass
         finally:
             self._shader_heal_pending = False
             if self._video_concealed:
@@ -544,12 +600,6 @@ class MPVEngine:
             return
 
         def _on_defect_found(defect_type: str, defect_pts: float):
-            DebugLogger.log(
-                "DEFECT_DETECTED",
-                f"Pipeline defect detected: {defect_type} at PTS={defect_pts:.2f}s",
-                defect=defect_type,
-                pts=defect_pts,
-            )
             self._safe_emit("defect_detected_signal", defect_type, defect_pts)
             if self.on_defect_detected:
                 try:
@@ -557,7 +607,7 @@ class MPVEngine:
                 except Exception as ex:
                     print(f"[MPVEngine] Error in on_defect_detected callback: {ex}")
 
-        DebugLogger.sample_and_log_color(self.player, curr_pts, context=context, on_defect=_on_defect_found)
+        FrameSampler.sample(self.player, curr_pts, on_defect=_on_defect_found)
 
     def _init_mpv(self):
         opts = {
@@ -617,7 +667,7 @@ class MPVEngine:
             "screenshot_format": "png",
             "screenshot_png_compression": 0,             # 0 = Completely uncompressed raw deflate (lossless)
             "screenshot_png_filter": 0,
-            "screenshot_tag_colorspace": True,           # Embed accurate sRGB/BT.709 color metadata
+            "screenshot_tag_colorspace": True,           # Embed accurate sRGB/Rec.709 color metadata
             "screenshot_high_bit_depth": True,
         }
         if self.wid is not None:
@@ -625,11 +675,23 @@ class MPVEngine:
         if getattr(self, "gpu_fallback_active", False):
             opts.update(self.GPU_FALLBACK_OPTS)
 
-        # Debug-level log access is required to see libplacebo's shader dumps
-        # (consumed by ShaderIntegrityMonitor; nothing is printed or stored).
-        self.player = mpv.MPV(log_handler=self._on_mpv_log, loglevel="debug", **opts)
+        # The log hook feeds ShaderIntegrityMonitor. It starts silent; _shader_watch_on()
+        # raises it to libplacebo-only debug output while shaders are compiling.
+        self._shader_watch_active = False
+        self._shader_watch_until = 0.0
+        if self.SHADER_WATCH_ENABLED:
+            opts["msg_level"] = "all=no"
+            self.player = mpv.MPV(log_handler=self._on_mpv_log, loglevel="no", **opts)
+        else:
+            self.player = mpv.MPV(**opts)
         self.tonemap_engine = TonemapEngine(self.player)
         self.stereo3d_engine = Stereo3DEngine(self.player)
+
+        # First frame of a newly loaded (or re-synced) file has reached the output
+        @self.player.event_callback("playback-restart")
+        def _playback_restart(_event):
+            if self._video_concealed and self._conceal_first_frame_time is None:
+                self._conceal_first_frame_time = time.monotonic()
 
         # Register mpv property observers
         @self.player.property_observer("seeking")
@@ -730,21 +792,6 @@ class MPVEngine:
             if val is not None:
                 tracks = self._augment_dcp_video_track(list(val))
                 v_tracks = [t for t in tracks if t.get("type") == "video"]
-                DebugLogger.log(
-                    "MPV_TRACK_LIST",
-                    f"track-list observer fired: {len(tracks)} tracks total ({len(v_tracks)} video)",
-                    video_tracks=[
-                        {
-                            "id": t.get("id"),
-                            "codec": t.get("codec"),
-                            "dolby-vision-profile": t.get("dolby-vision-profile"),
-                            "dolby-vision-level": t.get("dolby-vision-level"),
-                            "demux-dolby-vision-profile": t.get("demux-dolby-vision-profile"),
-                            "ff-index": t.get("ff-index"),
-                        }
-                        for t in v_tracks
-                    ]
-                )
                 self._safe_emit("track_list_signal", tracks)
                 if self.on_track_list_change:
                     self.on_track_list_change(tracks)
@@ -780,15 +827,7 @@ class MPVEngine:
         @self.player.property_observer("video-params")
         def _video_params_observer(_name, val):
             if isinstance(val, dict) and val:
-                if self._video_concealed and self._conceal_params_time is None:
-                    self._conceal_params_time = time.monotonic()
-                DebugLogger.log(
-                    "MPV_VIDEO_PARAMS",
-                    f"video-params observer fired: pixelformat={val.get('pixelformat')}, colormatrix={val.get('colormatrix')}, gamma={val.get('gamma')}",
-                    **val
-                )
                 self._auto_detect_and_apply_hdr(mpv_video_params=val)
-                DebugLogger.log_mpv_state("POST_VIDEO_PARAMS", self.player)
 
         @self.player.property_observer("paused-for-cache")
         def _cache_pause_observer(_name, val):
@@ -840,7 +879,6 @@ class MPVEngine:
         Discard and flush all contents, tracks, external audio/subtitle files,
         custom filters, delays, and state from the previous file before loading new media.
         """
-        DebugLogger.log("RESET_STATE", "reset_playback_state called")
         self._logged_color_checkpoints = set()
         self._end_video_conceal()
         # 1. Stop NVJPEG2000 controller if running and clear active flag
@@ -1053,19 +1091,6 @@ class MPVEngine:
                 probe_data=probe if 'probe' in locals() and isinstance(probe, dict) else None,
             )
 
-        DebugLogger.log(
-            "PRE_LOADFILE",
-            f"State snapshot immediately before player loadfile for {uri}",
-            is_epiq=is_epiq,
-            is_anamorphic_143=self.is_anamorphic_143,
-            probe_track=probe_v_track,
-            stereo3d_enabled=getattr(self.stereo3d_engine, "enabled", None),
-            tonemap_preset=getattr(self.tonemap_engine, "current_preset", None),
-            detected_source_hdr=getattr(self.tonemap_engine, "detected_source_hdr", None),
-        )
-        DebugLogger.log_mpv_state("PRE_LOADFILE", self.player)
-        DebugLogger.log_tonemap_state("PRE_LOADFILE", self.tonemap_engine)
-        DebugLogger.log_stereo_state("PRE_LOADFILE", self.stereo3d_engine)
 
         try:
             if start_pos is not None and float(start_pos) > 0.0:
@@ -1081,7 +1106,6 @@ class MPVEngine:
 
             self._begin_video_conceal()
             self.player.command("loadfile", uri, "replace")
-            DebugLogger.log("POST_LOADFILE", f"loadfile command executed successfully for {uri}")
             self.player.pause = False
             self.is_paused = False
             self._safe_emit("file_loaded_signal", uri)

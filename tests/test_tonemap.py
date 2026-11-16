@@ -102,7 +102,7 @@ class TestTonemapEngine(unittest.TestCase):
         self.assertIsInstance(is_hdr, bool)
 
     def test_dv_p5_hdr10_and_hlg_presets(self):
-        # Test DV P5 -> HDR10 (BT.2020 PQ)
+        # Test DV P5 -> HDR10 (Rec.2020 PQ)
         self.engine.apply_preset("dv_p5_hdr10")
         self.assertEqual(self.player["tone-mapping"], "clip")
         self.assertEqual(self.player["target-prim"], "bt.2020")
@@ -175,7 +175,7 @@ class TestTonemapEngine(unittest.TestCase):
         self.assertIsNotNone(self.engine.active_shader)
         self.assertTrue(self.engine.active_shader.replace("\\", "/").endswith("hdr_sdr_peak_100.glsl"))
         self.assertNotIn("2390", self.engine.get_status_summary()["preset_label"])
-        self.assertEqual(self.engine.get_status_summary()["output_label"], "BT.709 / Gamma 2.2")
+        self.assertEqual(self.engine.get_status_summary()["output_label"], "Rec.709 / Gamma 2.2")
 
     def test_target_peak_adjustment_updates_mpv_and_shader(self):
         self.engine.apply_preset("hdr10_sdr")
@@ -193,7 +193,7 @@ class TestTonemapEngine(unittest.TestCase):
             self.assertEqual(self.player["target-trc"], "gamma2.2", key)
 
     def test_bt2020_sdr_is_not_tonemapped(self):
-        # BT.2020 primaries with an SDR transfer (camera footage) must not be treated as HDR
+        # Rec.2020 primaries with an SDR transfer (camera footage) must not be treated as HDR
         self.assertEqual(
             TonemapEngine.detect_source_hdr_format(probe_video_track={"color_transfer": "bt709", "color_primaries": "bt2020"}),
             "SDR",
@@ -389,7 +389,7 @@ class TestTonemapEngine(unittest.TestCase):
         self.assertEqual(self.player["target-trc"], "gamma2.2")
         self.assertEqual(self.player["tone-mapping"], "spline")
         self.assertIsNone(self.engine.active_shader)
-        self.assertEqual(st_dv20_sdr["preset_label"], "Auto: 🧬 Dolby Vision P20 -> BT.709 SDR (RPU L8)")
+        self.assertEqual(st_dv20_sdr["preset_label"], "Auto: 🧬 Dolby Vision P20 -> Rec.709 SDR (RPU L8)")
 
         # Auto-convert DV P20 for HDR display
         st_dv20_hdr = self.engine.auto_configure_for_source("Dolby Vision P20", is_hdr_display=True)
@@ -405,13 +405,13 @@ class TestTonemapEngine(unittest.TestCase):
         self.assertEqual(self.engine.current_preset, "hlg_sdr")
         self.assertEqual(self.player["target-prim"], "bt.709")
         self.assertEqual(self.player["tone-mapping"], "bt.2390")
-        self.assertEqual(st_hlg_sdr["preset_label"], "Auto: ⚡ HLG (BT.2100) -> BT.709 SDR (Punchy Filmic)")
+        self.assertEqual(st_hlg_sdr["preset_label"], "Auto: ⚡ HLG (Rec.2100) -> Rec.709 SDR (Punchy Filmic)")
 
         # Auto-convert HLG for HDR display
         st_hlg_hdr = self.engine.auto_configure_for_source("HLG", is_hdr_display=True)
         self.assertEqual(self.engine.current_preset, "hdr10_hdr")
         self.assertEqual(self.player["target-prim"], "bt.2020")
-        self.assertEqual(st_hlg_hdr["preset_label"], "Auto: HLG -> HDR BT.2020 HLG (Display HDR)")
+        self.assertEqual(st_hlg_hdr["preset_label"], "Auto: HLG -> HDR Rec.2020 HLG (Display HDR)")
 
         # 3. Auto-convert HDR10+ for SDR display
         st_plus_sdr = self.engine.auto_configure_for_source("HDR10+", is_hdr_display=False)
@@ -421,7 +421,7 @@ class TestTonemapEngine(unittest.TestCase):
         self.assertEqual(self.player["target-peak"], 100)
         self.assertEqual(self.player["hdr-compute-peak"], "yes")
         self.assertAlmostEqual(self.player["hdr-contrast-recovery"], 0.35)
-        self.assertEqual(st_plus_sdr["preset_label"], "Auto: HDR10+ -> BT.709 SDR (Gamma 2.2, Dynamic Peak)")
+        self.assertEqual(st_plus_sdr["preset_label"], "Auto: HDR10+ -> Rec.709 SDR (Gamma 2.2, Dynamic Peak)")
         self.assertEqual(st_plus_sdr["display_dynamic_range"], "SDR")
 
         # 4. Auto-convert HDR10 for SDR display
@@ -429,21 +429,21 @@ class TestTonemapEngine(unittest.TestCase):
         self.assertEqual(self.player["tone-mapping"], "spline")
         self.assertEqual(self.player["target-peak"], 100)
         self.assertAlmostEqual(self.player["hdr-contrast-recovery"], 0.35)
-        self.assertEqual(st_hdr10_sdr["preset_label"], "Auto: HDR10 -> BT.709 SDR (Gamma 2.2)")
+        self.assertEqual(st_hdr10_sdr["preset_label"], "Auto: HDR10 -> Rec.709 SDR (Gamma 2.2)")
 
         # 5. Auto-convert HDR10 for HDR display
         st_hdr10_hdr = self.engine.auto_configure_for_source("HDR10", is_hdr_display=True)
         self.assertEqual(self.player["target-prim"], "bt.2020")
         self.assertEqual(self.player["target-trc"], "pq")
         self.assertEqual(self.player["target-peak"], 1000)
-        self.assertEqual(st_hdr10_hdr["preset_label"], "Auto: HDR10 -> HDR BT.2020 PQ (Display HDR)")
+        self.assertEqual(st_hdr10_hdr["preset_label"], "Auto: HDR10 -> HDR Rec.2020 PQ (Display HDR)")
         self.assertEqual(st_hdr10_hdr["display_dynamic_range"], "HDR")
 
         # 6. Bottom OSC color mapping badge updates cleanly
         app = QApplication.instance() or QApplication([])
         osc = OSCControls()
         osc.set_color_status(st_plus_sdr["preset_label"])
-        self.assertEqual(osc.lbl_color_badge.text(), "COLOR: Auto: HDR10+ -> BT.709 SDR (Gamma 2.2, Dynamic Peak)")
+        self.assertEqual(osc.lbl_color_badge.text(), "COLOR: Auto: HDR10+ -> Rec.709 SDR (Gamma 2.2, Dynamic Peak)")
 
     def test_passthrough_disables_tonemapping_and_blocks_auto_override(self):
         from core.mpv_engine import MPVEngine

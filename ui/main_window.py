@@ -21,7 +21,6 @@ from core.iptv_manager import IPTVManager, IPTVChannel
 from core.playlist_manager import PlaylistManager, PlaylistItem
 from core.media_inspector import MediaInspector
 from core.gpu_detector import GPUDetector
-from core.debug_logger import DebugLogger
 
 from ui.video_widget import VideoWidget
 from ui.osc_controls import OSCControls
@@ -783,7 +782,6 @@ class MainWindow(QMainWindow):
         self.engine.bridge.track_list_signal.connect(self._on_engine_track_list_changed)
         self.engine.bridge.tonemap_status_signal.connect(self._on_tonemap_status_changed)
         self.engine.bridge.defect_detected_signal.connect(self._handle_defect_detected)
-        self.engine.bridge.video_conceal_signal.connect(self.video_widget.set_mpv_concealed)
         self._last_auto_color_toast = None
 
     def _on_engine_track_list_changed(self, tracks: list):
@@ -857,17 +855,12 @@ class MainWindow(QMainWindow):
                 "last_time": now,
                 "pts": pts,
             }
-            DebugLogger.log("DEFECT_STRIKE", f"Defect candidate logged (strike 1/3): {defect_type} at PTS={pts:.2f}s")
             return
         else:
             if now - self._defect_strikes["last_time"] < 0.6:
                 return
             self._defect_strikes["count"] += 1
             self._defect_strikes["last_time"] = now
-            DebugLogger.log(
-                "DEFECT_STRIKE",
-                f"Defect candidate confirmed (strike {self._defect_strikes['count']}/3): {defect_type} at PTS={pts:.2f}s",
-            )
             if self._defect_strikes["count"] < 3:
                 return
 
@@ -884,10 +877,6 @@ class MainWindow(QMainWindow):
         ):
             self._last_defect_recovery["count"] += 1
             if self._last_defect_recovery["count"] > 2:
-                DebugLogger.log(
-                    "AUTO_RECOVERY_LOOP_GUARD",
-                    f"Suppressed repeated recovery loop for '{defect_type}' at PTS={pts:.2f}s",
-                )
                 return
         else:
             self._last_defect_recovery = {"time": now, "pts": pts, "count": 1}
@@ -896,10 +885,6 @@ class MainWindow(QMainWindow):
         if not media_uri or not os.path.exists(media_uri):
             return
 
-        DebugLogger.log(
-            "AUTO_RESTART_TRIGGER",
-            f"Automated restart triggered: defect='{defect_type}' confirmed across 3 strikes at PTS={pts:.2f}s, uri={media_uri}",
-        )
         self.show_toast(f"⚠️ Confirmed render defect ({defect_type}). Auto-restarting engine...")
 
         # 1. Capture exact playback state
@@ -928,23 +913,12 @@ class MainWindow(QMainWindow):
         mins = int(saved_pos // 60)
         secs = int(saved_pos % 60)
         self.show_toast(f"✅ Playback cleanly auto-recovered at {mins:02d}:{secs:02d}.")
-        DebugLogger.log("AUTO_RESTART_SUCCESS", f"Playback successfully auto-recovered at PTS={saved_pos:.2f}s")
 
     # Playback Actions
     def play_media(self, uri: str, title: str = "", item_type: str = "file"):
         # Ensure decoders and video output pipeline are verified and ready before loading media
         self.engine.ensure_decoders_ready()
 
-        inst_id = DebugLogger.start_instance(f"play_media({item_type})", uri)
-        DebugLogger.log(
-            "UI_PLAY_MEDIA",
-            f"play_media initiated: uri={uri}",
-            title=title,
-            item_type=item_type,
-            instance_id=inst_id,
-            active_preset=getattr(self.engine.tonemap_engine, "current_preset", None),
-            stereo_enabled=getattr(self.engine.stereo3d_engine, "enabled", None)
-        )
         # Discard all contents and tracks loaded for the previous file
         self.menu_video_tracks.clear()
         self.menu_audio_tracks.clear()
@@ -1411,18 +1385,16 @@ class MainWindow(QMainWindow):
 
     # File Opening Actions
     def action_open_file(self):
-        DebugLogger.log("UI_ACTION", "action_open_file: opening native file dialog")
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Media File", "",
             "Video & Audio Files (*.mp4 *.mkv *.avi *.mov *.mxf *.webm *.ts *.flv *.j2k *.jp2 *.av2 *.obu *.mp3 *.wav *.flac);;All Files (*.*)"
         )
         if path:
-            DebugLogger.log("UI_ACTION", f"User picked file from dialog: {path}")
             if self._try_play_mxf_as_dcp_reel(path):
                 return
             self.play_media(path)
         else:
-            DebugLogger.log("UI_ACTION", "User cancelled file dialog")
+            pass
 
     def action_open_dcp(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Digital Cinema Package (DCP) Folder")
@@ -1897,7 +1869,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Benchmark Error", f"GPU benchmark failed:\n{e}")
 
     def _apply_tonemap_preset(self, preset_key: str):
-        DebugLogger.log("UI_TONEMAP_PRESET", f"_apply_tonemap_preset requested: {preset_key}")
         self.engine.tonemap_engine.apply_preset(preset_key)
         self._on_drawer_preset_changed(preset_key)
 

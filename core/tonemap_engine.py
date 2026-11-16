@@ -1,6 +1,6 @@
 """
 BOOB Player - Color Pipeline & Tonemapping Engine
-Handles Dolby Vision Profile 5 (IPTPQc2 to SDR), HDR10 (BT.2020 PQ to SDR),
+Handles Dolby Vision Profile 5 (IPTPQc2 to SDR), HDR10 (Rec.2020 PQ to SDR),
 and DCI-XYZ (SMPTE 428-1 Gamma 2.6 to sRGB/Rec.709) color conversions.
 """
 
@@ -12,34 +12,96 @@ import tempfile
 import threading
 from typing import Optional, Dict, Any, Callable, List
 from core.app_paths import get_app_base_dir, get_shaders_dir, get_tool_path
-from core.debug_logger import DebugLogger
+
+
+class _PropertyBatch:
+    """
+    Stand-in for the mpv player while TonemapEngine.apply_preset runs.
+
+    apply_preset first resets about a dozen options to defaults and then writes the preset's
+    values, and it runs several times per file load (reset, auto-detect, track list, video
+    params). Every write to a renderer option makes mpv flush its renderer cache, which is
+    slow on gpu-next (and very slow on the OpenGL fallback). This collects the writes, so
+    only the final value of each option is kept, and on flush sends mpv just the options
+    whose value really changes.
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self._pending = {}
+        self._lock = threading.Lock()
+
+    def __setitem__(self, key, value):
+        with self._lock:
+            self._pending[key] = value
+
+    def __getitem__(self, key):
+        with self._lock:
+            if key in self._pending:
+                return self._pending[key]
+        return self._real[key]
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    @staticmethod
+    def _same(current, wanted) -> bool:
+        """True only when mpv already holds `wanted` (anything doubtful counts as different)."""
+        try:
+            if isinstance(current, list):
+                if current and isinstance(current[0], dict):  # e.g. vo -> [{'name': 'gpu-next', ...}]
+                    return [d.get("name") for d in current] == [wanted]
+                return not current and wanted in ("", None)
+            if isinstance(current, bool):
+                return str(wanted).lower() in (("yes", "true") if current else ("no", "false"))
+            try:
+                return float(current) == float(wanted)
+            except (TypeError, ValueError):
+                pass
+            return current is not None and str(current) == str(wanted)
+        except Exception:
+            return False
+
+    def flush(self):
+        with self._lock:
+            pending, self._pending = self._pending, {}
+        for key, value in pending.items():
+            try:
+                if self._same(self._real[key], value):
+                    continue
+            except Exception:
+                pass
+            try:
+                self._real[key] = value
+            except Exception:
+                pass
 
 
 class TonemapEngine:
     PRESETS = {
-        "auto": "Automatic Detection (BT.709 Standard)",
-        "dv_p5_sdr": "Dolby Vision Profile 5 -> BT.709 SDR",
-        "dv_p5_hdr10": "Dolby Vision Profile 5 -> HDR10 (BT.2020 PQ)",
-        "dv_p5_hlg": "Dolby Vision Profile 5 -> HLG (BT.2020 HLG)",
-        "dv_p20_rpu_sdr": "🧬 Dolby Vision P20 -> BT.709 SDR (Dynamic RPU L8)",
+        "auto": "Automatic Detection (Rec.709 Standard)",
+        "dv_p5_sdr": "Dolby Vision Profile 5 -> Rec.709 SDR",
+        "dv_p5_hdr10": "Dolby Vision Profile 5 -> HDR10 (Rec.2020 PQ)",
+        "dv_p5_hlg": "Dolby Vision Profile 5 -> HLG (Rec.2020 HLG)",
+        "dv_p20_rpu_sdr": "🧬 Dolby Vision P20 -> Rec.709 SDR (Dynamic RPU L8)",
         "dv_p20_rpu_hdr": "🧬 Dolby Vision P20 -> HDR10 / HDR10+ (Dynamic RPU Trim)",
-        "hlg_sdr": "⚡ HLG (BT.2100) -> BT.709 SDR (Punchy Filmic)",
-        "dvis_dcp_hdr10": "💎 DVis (DCP) -> Consumer HDR10 (BT.2020 PQ)",
+        "hlg_sdr": "⚡ HLG (Rec.2100) -> Rec.709 SDR (Punchy Filmic)",
+        "dvis_dcp_hdr10": "💎 DVis (DCP) -> Consumer HDR10 (Rec.2020 PQ)",
         "dvis_dcp_sdr": "💎 DVis (DCP) -> Rec.709 SDR (108 -> 100 nits)",
-        "hdr10_sdr": "HDR10 (BT.2020 PQ) -> BT.709 SDR (Gamma 2.2)",
-        "hdr10plus_sdr": "HDR10+ (SMPTE 2094-40) -> BT.709 SDR (Dynamic Peak)",
-        "hdr10_hdr": "HDR10 / HDR -> BT.2020 PQ (HDR Display)",
-        "hdr10plus_hdr": "HDR10+ (SMPTE 2094-40) -> BT.2020 PQ (HDR Display Dynamic)",
-        "dci_xyz_srgb": "DCI-XYZ -> BT.709 (DCP Cinema)",
-        "filmic_hable": "Filmic Hable -> BT.709 SDR",
-        "spline_sdr": "Spline -> BT.709 SDR (100 Nits)",
-        "mobius_sdr": "Mobius -> BT.709 SDR",
-        "reinhard_sdr": "Reinhard -> BT.709 SDR",
+        "hdr10_sdr": "HDR10 (Rec.2020 PQ) -> Rec.709 SDR (Gamma 2.2)",
+        "hdr10plus_sdr": "HDR10+ (SMPTE 2094-40) -> Rec.709 SDR (Dynamic Peak)",
+        "hdr10_hdr": "HDR10 / HDR -> Rec.2020 PQ (HDR Display)",
+        "hdr10plus_hdr": "HDR10+ (SMPTE 2094-40) -> Rec.2020 PQ (HDR Display Dynamic)",
+        "dci_xyz_srgb": "DCI-XYZ -> Rec.709 (DCP Cinema)",
+        "filmic_hable": "Filmic Hable -> Rec.709 SDR",
+        "spline_sdr": "Spline -> Rec.709 SDR (100 Nits)",
+        "mobius_sdr": "Mobius -> Rec.709 SDR",
+        "reinhard_sdr": "Reinhard -> Rec.709 SDR",
         "passthrough": "Pass-Through (No Tonemapping)",
     }
 
     # Human-readable names for status / telemetry lines
-    PRIM_NAMES = {"bt.709": "BT.709", "bt.2020": "BT.2020", "auto": "Source", "dci-p3": "DCI-P3"}
+    PRIM_NAMES = {"bt.709": "Rec.709", "bt.2020": "Rec.2020", "auto": "Source", "dci-p3": "DCI-P3"}
     TRC_NAMES = {"gamma2.2": "Gamma 2.2", "srgb": "sRGB", "bt.1886": "BT.1886", "pq": "PQ", "hlg": "HLG", "auto": "Source"}
     CURVE_NAMES = {
         "clip": "None (Clip)", "spline": "Spline", "mobius": "Mobius", "reinhard": "Reinhard",
@@ -436,7 +498,27 @@ class TonemapEngine:
         self.apply_preset(self.current_preset)
 
     def apply_preset(self, preset_key: str, is_epiq: Optional[bool] = None, fps: Optional[float] = None):
-        DebugLogger.log("APPLY_PRESET", f"apply_preset requested: '{preset_key}', is_epiq={is_epiq}, fps={fps}")
+        real = self.player
+        if not real or getattr(self, "_batch_view", None) is not None:
+            return self._apply_preset_impl(preset_key, is_epiq, fps)
+        view = _PropertyBatch(real)
+        self._batch_view = view
+        self.player = view
+        try:
+            return self._apply_preset_impl(preset_key, is_epiq, fps)
+        finally:
+            self._end_property_batch()
+
+    def _end_property_batch(self):
+        """Hand the collected option writes to mpv (only the ones that change) and restore the player."""
+        view = getattr(self, "_batch_view", None)
+        if view is None:
+            return
+        self._batch_view = None
+        self.player = view._real
+        view.flush()
+
+    def _apply_preset_impl(self, preset_key: str, is_epiq: Optional[bool] = None, fps: Optional[float] = None):
         self.current_preset = preset_key
         self.auto_conversion_summary = None
         if preset_key == "auto":
@@ -444,7 +526,6 @@ class TonemapEngine:
         if is_epiq is not None:
             self.is_epiq = is_epiq
         if not self.player:
-            DebugLogger.log("APPLY_PRESET", f"Player handle is None, stored preset '{preset_key}' without applying mpv properties")
             return
 
         # 1. Clear existing user shaders & video filters
@@ -520,7 +601,7 @@ class TonemapEngine:
                 self._load_shader(shader_file)
 
         elif preset_key == "hlg_sdr":
-            # HLG (BT.2100) -> Rec.709 SDR with Punchy Filmic Contrast & Deep Blacks
+            # HLG (Rec.2100) -> Rec.709 SDR with Punchy Filmic Contrast & Deep Blacks
             self.current_algorithm = "bt.2390"
             self.target_peak = 100
             self.target_prim = "bt.709"
@@ -547,7 +628,7 @@ class TonemapEngine:
                 self._load_shader(shader_file)
 
         elif preset_key == "dv_p5_hdr10":
-            # Dolby Vision Profile 5: IPTPQc2 -> HDR10 (BT.2020 PQ)
+            # Dolby Vision Profile 5: IPTPQc2 -> HDR10 (Rec.2020 PQ)
             self.current_algorithm = "clip"
             self.target_peak = 1000
             self.target_prim = "bt.2020"
@@ -566,7 +647,7 @@ class TonemapEngine:
             self._clear_shaders()
 
         elif preset_key == "dv_p20_rpu_sdr":
-            # Dolby Vision Profile 20 -> BT.709 SDR mapped dynamically
+            # Dolby Vision Profile 20 -> Rec.709 SDR mapped dynamically
             # using extracted RPU Level 1 + Level 3 + Level 8 trim metadata (zero GLSL shaders)
             trims = self.extract_dynamic_rpu_trims()
             self.last_rpu_trims = trims
@@ -584,18 +665,6 @@ class TonemapEngine:
             self.brightness = int(trims.get("brightness_adj", 0))
             self.saturation = int(trims.get("saturation_adj", 0))
 
-            DebugLogger.log(
-                "APPLY_PRESET_DV_P20_SDR",
-                "Applying Dolby Vision P20 Level 8 trim pipeline",
-                slope_gain=slope,
-                power_exp=power,
-                computed_gamma=self.gamma,
-                computed_contrast=self.contrast,
-                computed_brightness=self.brightness,
-                computed_saturation=self.saturation,
-                target_peak=self.target_peak,
-                trims=trims,
-            )
 
             try:
                 if isinstance(self.player, dict):
@@ -614,7 +683,7 @@ class TonemapEngine:
                 self.player["saturation"] = self.saturation
                 self.player["gamma"] = self.gamma
             except Exception as e:
-                DebugLogger.log("APPLY_PRESET_ERROR", f"Error setting mpv properties: {e}")
+                pass
             self._clear_shaders()
 
         elif preset_key == "dv_p20_rpu_hdr":
@@ -677,7 +746,7 @@ class TonemapEngine:
             self._clear_shaders()
 
         elif preset_key == "dv_p5_hlg":
-            # Dolby Vision Profile 5: IPTPQc2 -> HLG (BT.2020 HLG or Punchy HLG SDR)
+            # Dolby Vision Profile 5: IPTPQc2 -> HLG (Rec.2020 HLG or Punchy HLG SDR)
             hdr_disp = False
             try:
                 hdr_disp = bool(self.is_display_hdr())
@@ -726,7 +795,7 @@ class TonemapEngine:
                     self._load_shader(shader_file)
 
         elif preset_key == "dvis_dcp_hdr10":
-            # DVis DCP: 108-nit DCI-XYZ PQ10K -> Consumer HDR10 (BT.2020 PQ)
+            # DVis DCP: 108-nit DCI-XYZ PQ10K -> Consumer HDR10 (Rec.2020 PQ)
             self.current_algorithm = "clip"
             self.target_peak = 1000
             self.target_prim = "bt.2020"
@@ -770,12 +839,12 @@ class TonemapEngine:
                 self._load_shader(shader_file)
 
         elif preset_key in ("hdr10_sdr", "hdr10plus_sdr"):
-            # HDR / HDR10 / HDR10+ (BT.2020 PQ / SMPTE 2094-40) -> BT.709 SDR, Gamma 2.2 @ 100 nits.
+            # HDR / HDR10 / HDR10+ (Rec.2020 PQ / SMPTE 2094-40) -> Rec.709 SDR, Gamma 2.2 @ 100 nits.
             # Delivers the 6_spline_p50 reference brightness at 100 nits via hdr_sdr_peak_100.glsl.
             self._apply_sdr_bt709("spline", target_peak=100, contrast_recovery=0.35)
 
         elif preset_key == "hdr10_hdr":
-            # HDR10 / HDR -> BT.2020 PQ (HDR Display)
+            # HDR10 / HDR -> Rec.2020 PQ (HDR Display)
             self.current_algorithm = "clip"
             self.target_peak = 1000
             self.target_prim = "bt.2020"
@@ -794,7 +863,7 @@ class TonemapEngine:
             self._clear_shaders()
 
         elif preset_key == "hdr10plus_hdr":
-            # HDR10+ (SMPTE 2094-40) -> BT.2020 PQ (HDR Display Dynamic)
+            # HDR10+ (SMPTE 2094-40) -> Rec.2020 PQ (HDR Display Dynamic)
             self.current_algorithm = "bt.2390"
             self.target_peak = 1000
             self.target_prim = "bt.2020"
@@ -901,6 +970,7 @@ class TonemapEngine:
             except Exception:
                 pass
 
+        self._end_property_batch()
         if self.on_preset_change:
             try:
                 self.on_preset_change(self.get_status_summary())
@@ -921,7 +991,7 @@ class TonemapEngine:
         self._load_shader(shader_file)
 
     def _apply_sdr_bt709(self, curve: str, target_peak: int = 100, contrast_recovery: float = 0.35):
-        """Shared SDR output pipeline: any source -> BT.709 primaries, Gamma 2.2 @ 100 nits."""
+        """Shared SDR output pipeline: any source -> Rec.709 primaries, Gamma 2.2 @ 100 nits."""
         self.current_algorithm = curve
         self.target_peak = target_peak
         self.target_prim = "bt.709"
@@ -1301,7 +1371,7 @@ class TonemapEngine:
     ) -> list:
         """
         Constructs FFmpeg command line for converting a DVis (Dolby Vision DCP) picture MXF
-        to Consumer HDR10 (BT.2020 PQ) or Studio Rec.709 SDR.
+        to Consumer HDR10 (Rec.2020 PQ) or Studio Rec.709 SDR.
         """
         resolved_ffmpeg = get_tool_path("ffmpeg") if ffmpeg_bin == "ffmpeg" else ffmpeg_bin
         args = [
@@ -1475,6 +1545,7 @@ class TonemapEngine:
             normalized = shader_path.replace("\\", "/")
             self.player.command("change-list", "glsl-shaders", "set", normalized)
             self.active_shader = normalized
+            self._shaders_cleared = False
         except Exception:
             try:
                 self.player["glsl-shaders"] = normalized
@@ -1485,9 +1556,13 @@ class TonemapEngine:
     def _clear_shaders(self):
         if not self.player:
             return
+        # Every glsl-shaders change makes mpv rebuild its renderer; skip when already empty
+        if self.active_shader is None and getattr(self, "_shaders_cleared", False):
+            return
         try:
             self.player.command("change-list", "glsl-shaders", "clr", "")
             self.active_shader = None
+            self._shaders_cleared = True
         except Exception:
             try:
                 self.player["glsl-shaders"] = ""
@@ -1512,40 +1587,30 @@ class TonemapEngine:
         if probe_video_track:
             fmt = probe_video_track.get("hdr_format")
             if fmt and fmt != "SDR":
-                DebugLogger.log("DETECT_HDR_BRANCH", f"Matched probe_video_track.hdr_format='{fmt}'", fmt=fmt)
                 return str(fmt)
             dvp = probe_video_track.get("dolby_vision_profile")
             if dvp == 5 or probe_video_track.get("is_dv_p5"):
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track Dolby Vision P5", dvp=dvp)
                 return "Dolby Vision P5"
             if dvp == 20 or probe_video_track.get("is_dv_p20"):
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track Dolby Vision P20", dvp=dvp)
                 return "Dolby Vision P20"
             if dvp is not None:
-                DebugLogger.log("DETECT_HDR_BRANCH", f"Matched probe_video_track Dolby Vision P{dvp}", dvp=dvp)
                 return f"Dolby Vision P{dvp}"
             if probe_video_track.get("is_hdr10plus"):
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track is_hdr10plus")
                 return "HDR10+"
             trc = str(probe_video_track.get("color_transfer", "") or "").lower()
             prim = str(probe_video_track.get("color_primaries", "") or "").lower()
             if trc in ("arib-std-b67", "hlg"):
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track HLG", trc=trc)
                 return "HLG"
             if trc in ("smpte2084", "pq"):
                 res = "HDR10+" if any(k in uri_l for k in ("hdr10+", "hdr10plus", "2094")) else "HDR10"
-                DebugLogger.log("DETECT_HDR_BRANCH", f"Matched probe_video_track PQ -> '{res}'", trc=trc, prim=prim)
                 return res
             if trc == "smpte428" or "xyz" in str(probe_video_track.get("pix_fmt", "")).lower():
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track DCI-XYZ")
                 return "DCI-XYZ"
             sdr_trcs = ("bt709", "bt470bg", "bt470m", "smpte170m", "iec61966-2-1", "gamma22", "gamma28", "bt2020-10", "bt2020-12")
             if trc in sdr_trcs:
-                # Wide-gamut SDR (e.g. BT.2020 primaries + BT.709 transfer): gamut-map only, never tonemap
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track SDR TRC", trc=trc)
+                # Wide-gamut SDR (e.g. Rec.2020 primaries + Rec.709 transfer): gamut-map only, never tonemap
                 return "SDR"
             if "bt2020" in prim or probe_video_track.get("hdr"):
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched probe_video_track HDR via prim/hdr", prim=prim)
                 return "HDR"
 
         is_dv_hint = any(k in uri_l for k in (".dv.", "-dv.", "_dv.", "dv-", "dv_", "dovi", "dolby.vision", "dolby vision", "dv.hevc", "dv.h265"))
@@ -1557,14 +1622,11 @@ class TonemapEngine:
                     continue
                 dvp = t.get("dolby-vision-profile") or t.get("demux-dolby-vision-profile")
                 if dvp == 20 or str(dvp) == "20":
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_tracks Dolby Vision P20", dvp=dvp)
                     return "Dolby Vision P20"
                 if dvp == 5 or str(dvp) == "5":
                     res = "Dolby Vision P20" if is_dv_p20_hint else "Dolby Vision P5"
-                    DebugLogger.log("DETECT_HDR_BRANCH", f"Matched mpv_tracks DV P5 (hint P20={is_dv_p20_hint}) -> '{res}'", dvp=dvp)
                     return res
                 if dvp is not None:
-                    DebugLogger.log("DETECT_HDR_BRANCH", f"Matched mpv_tracks Dolby Vision P{dvp}", dvp=dvp)
                     return f"Dolby Vision P{dvp}"
 
         if mpv_video_params:
@@ -1577,72 +1639,53 @@ class TonemapEngine:
 
             if "dolbyvision" in cmat_l:
                 if probe_video_track and (probe_video_track.get("is_dv_p20") or probe_video_track.get("dolby_vision_profile") == 20):
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params dolbyvision + probe P20")
                     return "Dolby Vision P20"
                 if mpv_tracks:
                     for t in mpv_tracks:
                         if t.get("type") == "video":
                             p = t.get("dolby-vision-profile") or t.get("demux-dolby-vision-profile")
                             if p == 20 or str(p) == "20":
-                                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params dolbyvision + track P20")
                                 return "Dolby Vision P20"
                 if is_dv_p20_hint:
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params dolbyvision + uri hint P20")
                     return "Dolby Vision P20"
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params dolbyvision -> default P5")
                 return "Dolby Vision P5"
             if "hlg" in gamma_l or "arib-std-b67" in gamma_l:
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params HLG", gamma=gamma_l)
                 return "HLG"
             if any(k in gamma_l for k in ("pq", "smpte2084", "st2084")):
                 if probe_video_track and (probe_video_track.get("is_dv_p20") or probe_video_track.get("dolby_vision_profile") == 20):
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params PQ + probe P20 -> 'Dolby Vision P20'")
                     return "Dolby Vision P20"
                 if probe_video_track and (probe_video_track.get("is_dv_p5") or probe_video_track.get("dolby_vision_profile") == 5):
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params PQ + probe P5 -> 'Dolby Vision P5'")
                     return "Dolby Vision P5"
                 if mpv_tracks:
                     for t in mpv_tracks:
                         if t.get("type") == "video":
                             p = t.get("dolby-vision-profile") or t.get("demux-dolby-vision-profile")
                             if p == 20 or str(p) == "20":
-                                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params PQ + track P20 -> 'Dolby Vision P20'")
                                 return "Dolby Vision P20"
                             if p == 5 or str(p) == "5":
                                 res = "Dolby Vision P20" if is_dv_p20_hint else "Dolby Vision P5"
-                                DebugLogger.log("DETECT_HDR_BRANCH", f"Matched mpv_video_params PQ + track P5 -> '{res}'")
                                 return res
                 if is_dv_p20_hint:
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params PQ + hint P20 -> 'Dolby Vision P20'")
                     return "Dolby Vision P20"
                 if is_dv_hint:
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params PQ + hint DV -> 'Dolby Vision P5'")
                     return "Dolby Vision P5"
                 res = "HDR10+" if any(k in uri_l for k in ("hdr10+", "hdr10plus", "2094")) else "HDR10"
-                DebugLogger.log("DETECT_HDR_BRANCH", f"Matched mpv_video_params PQ -> '{res}'", gamma=gamma_l)
                 return res
             if "xyz" in pix_l or "xyz" in cmat_l:
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params DCI-XYZ")
                 return "DCI-XYZ"
             sdr_gamma = any(k in gamma_l for k in ("bt.1886", "bt.709", "srgb", "gamma", "linear")) if gamma_l else False
             if sdr_gamma and sig_peak <= 1.5 and max_luma <= 250:
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params SDR gamma and peak", gamma=gamma_l, sig_peak=sig_peak)
                 return "SDR"
             if "bt.2020" in prim_l or "bt2020" in prim_l or sig_peak > 1.5 or max_luma > 250:
                 if any(k in uri_l for k in ("hdr10+", "hdr10plus", "2094")):
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params HDR10+ via prim/peak")
                     return "HDR10+"
                 if any(k in uri_l for k in ("hdr10", "uhd")):
-                    DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params HDR10 via prim/peak")
                     return "HDR10"
-                DebugLogger.log("DETECT_HDR_BRANCH", "Matched mpv_video_params HDR via prim/peak")
                 return "HDR"
 
         if any(k in uri_l for k in ("hdr10+", "hdr10plus")):
-            DebugLogger.log("DETECT_HDR_BRANCH", "Matched URI hint HDR10+")
             return "HDR10+"
 
-        DebugLogger.log("DETECT_HDR_BRANCH", "No HDR markers matched -> SDR default")
         return "SDR"
 
     def auto_configure_for_source(
@@ -1659,21 +1702,21 @@ class TonemapEngine:
 
         if src in ("Dolby Vision P20", "Dolby Vision Profile 20"):
             preset = "dv_p20_rpu_hdr" if hdr_disp else "dv_p20_rpu_sdr"
-            summary = f"Auto: 🧬 Dolby Vision P20 -> {'HDR10/10+ (RPU)' if hdr_disp else 'BT.709 SDR (RPU L8)'}"
+            summary = f"Auto: 🧬 Dolby Vision P20 -> {'HDR10/10+ (RPU)' if hdr_disp else 'Rec.709 SDR (RPU L8)'}"
         elif src == "Dolby Vision P5":
             preset = "dv_p5_hdr10" if hdr_disp else "dv_p5_sdr"
-            summary = f"Auto: Dolby Vision P5 -> {'HDR10 BT.2020 PQ' if hdr_disp else 'BT.709 SDR'}"
+            summary = f"Auto: Dolby Vision P5 -> {'HDR10 Rec.2020 PQ' if hdr_disp else 'Rec.709 SDR'}"
         elif src == "HDR10+":
             preset = "hdr10plus_hdr" if hdr_disp else "hdr10plus_sdr"
             summary = (
-                "Auto: HDR10+ -> HDR BT.2020 PQ (Display HDR)"
-                if hdr_disp else "Auto: HDR10+ -> BT.709 SDR (Gamma 2.2, Dynamic Peak)"
+                "Auto: HDR10+ -> HDR Rec.2020 PQ (Display HDR)"
+                if hdr_disp else "Auto: HDR10+ -> Rec.709 SDR (Gamma 2.2, Dynamic Peak)"
             )
         elif src == "HDR10":
             preset = "hdr10_hdr" if hdr_disp else "hdr10_sdr"
             summary = (
-                "Auto: HDR10 -> HDR BT.2020 PQ (Display HDR)"
-                if hdr_disp else "Auto: HDR10 -> BT.709 SDR (Gamma 2.2)"
+                "Auto: HDR10 -> HDR Rec.2020 PQ (Display HDR)"
+                if hdr_disp else "Auto: HDR10 -> Rec.709 SDR (Gamma 2.2)"
             )
         elif src == "DCI-XYZ":
             preset = "dci_xyz_srgb"
@@ -1681,27 +1724,19 @@ class TonemapEngine:
         elif src == "HLG":
             preset = "hdr10_hdr" if hdr_disp else "hlg_sdr"
             summary = (
-                "Auto: HLG -> HDR BT.2020 HLG (Display HDR)"
-                if hdr_disp else "Auto: ⚡ HLG (BT.2100) -> BT.709 SDR (Punchy Filmic)"
+                "Auto: HLG -> HDR Rec.2020 HLG (Display HDR)"
+                if hdr_disp else "Auto: ⚡ HLG (Rec.2100) -> Rec.709 SDR (Punchy Filmic)"
             )
         elif src == "HDR" or src.startswith("Dolby Vision"):
             preset = "hdr10_hdr" if hdr_disp else "hdr10_sdr"
             summary = (
-                f"Auto: {src} -> HDR BT.2020 PQ (Display HDR)"
-                if hdr_disp else f"Auto: {src} -> BT.709 SDR (Gamma 2.2)"
+                f"Auto: {src} -> HDR Rec.2020 PQ (Display HDR)"
+                if hdr_disp else f"Auto: {src} -> Rec.709 SDR (Gamma 2.2)"
             )
         else:
             preset = "auto"
             summary = None
 
-        DebugLogger.log(
-            "AUTO_CONFIGURE",
-            f"auto_configure_for_source: source_hdr_format='{src}', hdr_display={hdr_disp} -> selected preset='{preset}'",
-            source_hdr_format=src,
-            is_hdr_display=hdr_disp,
-            selected_preset=preset,
-            summary=summary,
-        )
 
         self._forced_display_hdr = hdr_disp
         try:

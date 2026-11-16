@@ -109,11 +109,11 @@ class TestIINAPlugin(unittest.TestCase):
         self.assertIn("0.133217", glsl)
         self.assertIn("0.676890", glsl)
 
-        # LMS -> BT.2020 matrix
+        # LMS -> Rec.2020 matrix
         self.assertIn("3.224645", glsl)
         self.assertIn("1.678015", glsl)
 
-        # BT.2020 -> Rec.709 matrix
+        # Rec.2020 -> Rec.709 matrix
         self.assertIn("1.6605", glsl)
         self.assertIn("1.1329", glsl)
         self.assertIn("1.1187", glsl)

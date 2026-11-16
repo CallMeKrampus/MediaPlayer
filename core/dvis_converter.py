@@ -1,6 +1,6 @@
 """
 BOOB Player - Dolby Vision / EDR Digital Cinema (DVis DCP) Conversion Engine
-Transforms 12-bit DCI HDR-DCP XYZ-PQ codestreams into Consumer HDR10 (BT.2020 PQ)
+Transforms 12-bit DCI HDR-DCP XYZ-PQ codestreams into Consumer HDR10 (Rec.2020 PQ)
 and Studio Rec.709 SDR deliverables with hardware GPU acceleration.
 """
 
@@ -24,14 +24,14 @@ from core.gpu_detector import GPUDetector
 # Precision Color Transformation Matrices (DCI HDR Addendum Annex C.5 / ITU-R)
 # ==============================================================================
 
-# Combined Matrix: DCI XYZ (D65) -> ITU-R BT.2020 Linear RGB
+# Combined Matrix: DCI XYZ (D65) -> Rec.2020 Linear RGB
 XYZ_TO_2020 = np.array([
     [ 1.7166514,  -0.35567138, -0.2533659 ],
     [-0.6666838,   1.6164807,   0.01576855],
     [ 0.01764132, -0.04277223,  0.9421033 ],
 ], dtype=np.float32)
 
-# Combined Matrix: DCI XYZ (D65) -> ITU-R BT.709 Linear RGB
+# Combined Matrix: DCI XYZ (D65) -> Rec.709 Linear RGB
 XYZ_TO_709 = np.array([
     [ 3.2409692,  -1.5373826,  -0.49861068],
     [-0.9692438,   1.8759677,   0.04155508],
@@ -74,7 +74,7 @@ def tonemap_sdr_luma_preserve(rgb_linear: np.ndarray, knee: float = 70.0, peak: 
     Applies luminance-weighted highlight knee roll-off (108+ nits DCI -> 100 nits SDR)
     while scaling RGB channels uniformly to preserve hue and saturation perfectly.
     """
-    # BT.709 Luminance weights
+    # Rec.709 Luminance weights
     y = (0.2126 * rgb_linear[..., 0] +
          0.7152 * rgb_linear[..., 1] +
          0.0722 * rgb_linear[..., 2])
@@ -255,7 +255,7 @@ class DVisConversionWorker(QThread):
         xyz_lin = pq_eotf(codes)
 
         if target_mode == "hdr10":
-            # 2a. Map to BT.2020 Linear
+            # 2a. Map to Rec.2020 Linear
             rgb2020 = np.maximum(xyz_lin @ XYZ_TO_2020.T, 0.0)
             # Re-encode to SMPTE ST 2084 PQ
             pq_encoded = pq_oetf(rgb2020)
@@ -287,7 +287,7 @@ class DVisConversionWorker(QThread):
         ]
 
         if cfg.target_mode == "hdr10":
-            # HDR10: BT.2020, ST 2084 PQ, Limited Range TV
+            # HDR10: Rec.2020, ST 2084 PQ, Limited Range TV
             cmd.extend([
                 "-vf", "zscale=matrixin=gbr:transferin=smpte2084:primariesin=bt2020:rangein=full:matrix=bt2020nc:transfer=smpte2084:primaries=bt2020:range=limited,format=yuv420p10le",
                 "-color_primaries", "bt2020",
@@ -307,7 +307,7 @@ class DVisConversionWorker(QThread):
                     "-x265-params", "hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(8500,39850)B(6550,2300)R(35400,14600)WP(15635,16450)L(10000000,1):max-cll=108,100"
                 ])
         else:
-            # SDR: Rec.709, BT.709, Limited Range TV
+            # SDR: Rec.709, Rec.709, Limited Range TV
             cmd.extend([
                 "-vf", "zscale=matrixin=gbr:transferin=bt709:primariesin=bt709:rangein=full:matrix=bt709:transfer=bt709:primaries=bt709:range=limited,format=yuv420p",
                 "-color_primaries", "bt709",
