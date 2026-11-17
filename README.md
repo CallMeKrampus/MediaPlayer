@@ -6,6 +6,12 @@ Engineered with a refined Minimalist Studio Dark aesthetic (`#0d0e12`), **BOOB P
 
 ---
 
+## Images
+
+<img width="1279" height="800" alt="image" src="https://github.com/user-attachments/assets/79c57dee-ce6d-48a3-a234-6213b3d1776f" />
+<img width="1279" height="802" alt="image" src="https://github.com/user-attachments/assets/d4bec1d5-4b3d-4b54-8ab3-ca6f9ac3e98e" />
+<img width="1555" height="959" alt="image" src="https://github.com/user-attachments/assets/740cd764-5fab-41ee-8f63-5e78fd0344df" />
+
 ## ✨ Comprehensive Feature Matrix
 
 ### 1. 🎞️ Theatrical Digital Cinema Package (DCP) Hardware Engine
@@ -39,7 +45,6 @@ Engineered with a refined Minimalist Studio Dark aesthetic (`#0d0e12`), **BOOB P
 * **NVIDIA nvJPEG2000 CUDA PTX Assembly Shader**:
   * Custom assembly PTX kernel (`xyz_to_rgb_graded`) running directly on GPU stream multiprocessors.
   * **Theatrical DCI-XYZ (SMPTE 428-1 Gamma 2.6) -> Rec.709 / sRGB Conversion** matrix:
-    $$\begin{bmatrix} R \\ G \\ B \end{bmatrix} = \begin{bmatrix} 3.2404542 & -1.5371385 & -0.4985314 \\ -0.9692660 & 1.8760108 & 0.0415560 \\ 0.0556434 & -0.2040259 & 1.0572252 \end{bmatrix} \times \begin{bmatrix} X / 4095.0 \\ Y / 4095.0 \\ Z / 4095.0 \end{bmatrix}^{2.6}$$
   * **EPIQ PLF Laser Cinema Calibration**: Calibrated red-boost scaling ($R_f \times 0.86$) reproducing high-contrast theatrical laser projection.
 * **3D LUT Calibration Support (`.cube` / `.3dl`, `Ctrl+L`)**:
   * Load professional 3D Look-Up Tables for reference studio monitors or film-print emulations (Kodak 2383 / Fuji 3513).
