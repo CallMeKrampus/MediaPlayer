@@ -88,6 +88,7 @@ class MPVSignalBridge(QObject):
     eof_signal = pyqtSignal(int)
     defect_detected_signal = pyqtSignal(str, float)
     shader_miscompile_signal = pyqtSignal(dict)
+    video_cover_signal = pyqtSignal(bool)
 
 
 class MPVEngine:
@@ -95,6 +96,16 @@ class MPVEngine:
     # constants. "win" (WGL) is named explicitly: with gpu-context=auto libmpv
     # picks ANGLE, which crashes in the bundled build.
     GPU_FALLBACK_OPTS = {"gpu_api": "opengl", "gpu_context": "win"}
+    # Preferred renderer. The bundled libmpv intermittently corrupts float constants while
+    # translating shaders for Direct3D 11 (flat purple / blue / red picture; about 1 in 5 launches
+    # measured). Vulkan does not use that translation step, was clean in 30 of 30 measured
+    # launches, and, unlike OpenGL, can present HDR.
+    PREFER_VULKAN = True
+    VULKAN_OPTS = {"gpu_api": "vulkan", "gpu_context": "winvk"}
+    # Pass libplacebo constants as runtime values instead of text literals in the shader source.
+    # Removes most long literals (26 -> 4 measured), which lowers the exposure of the Direct3D 11
+    # path if Vulkan is unavailable.
+    LIBPLACEBO_OPTS = "dynamic_constants=yes"
 
     def __init__(self, wid: Optional[int] = None):
         self.wid = wid
@@ -178,7 +189,11 @@ class MPVEngine:
         # miscompiled (corrupted float constants) and rebuilds the video output.
         self.shader_monitor = ShaderIntegrityMonitor(self._on_shader_miscompile)
         self._shader_heal_pending: bool = False
-        # True once the renderer was moved off Direct3D 11 (sticky for the process)
+        # Active renderer: "vulkan" (preferred), "d3d11" (when Vulkan is unavailable), or "opengl"
+        # (sticky fallback after a detected Direct3D 11 miscompile). Anything but "d3d11" means
+        # shader miscompile detection does not apply (gpu_fallback_active).
+        self.renderer: str = "d3d11"
+        self._vulkan_failed: bool = False
         self.gpu_fallback_active: bool = False
         # Video stays blanked from loadfile until its shaders are verified
         self._video_concealed: bool = False
@@ -466,10 +481,13 @@ class MPVEngine:
     # libplacebo's shader dumps are only needed while shaders are being compiled (a file
     # opens, or the colour pipeline changes). Debug logging stays off the rest of the time,
     # because mpv formatting and delivering it to Python slowed content switching 3-6x.
-    # Master switch for libmpv log access (shader miscompile detection, the OpenGL fallback
-    # and the black overlay at file open). OFF: any libmpv log hook, even a windowed one,
-    # made switching content freeze the UI for seconds, so mpv is created without one.
-    SHADER_WATCH_ENABLED = False
+    # Master switch for libmpv log access: shader miscompile detection, the automatic switch
+    # to OpenGL, and the black overlay at file open. The log hook slows content switching
+    # (measured 2-4 s UI stalls); a correct picture is preferred over that speed.
+    SHADER_WATCH_ENABLED = True
+    # Keep libplacebo shader dumps flowing for the whole session, so no compile can slip past
+    # a watch window. Turned off for good once the renderer has moved to OpenGL.
+    SHADER_WATCH_ALWAYS_ON = True
     SHADER_WATCH_MSG_LEVEL = "all=no,vo/gpu-next/libplacebo=debug"
     SHADER_WATCH_MIN_SECS = 2.5
 
@@ -505,7 +523,9 @@ class MPVEngine:
         else:
             QTimer.singleShot(250, self._shader_watch_tick)
 
-    def _shader_watch_off(self):
+    def _shader_watch_off(self, force: bool = False):
+        if self.SHADER_WATCH_ALWAYS_ON and not force and not getattr(self, "gpu_fallback_active", False):
+            return
         self._shader_watch_active = False
         if not self.player:
             return
@@ -546,13 +566,48 @@ class MPVEngine:
         # Let the current burst of shader compiles finish before tearing down
         QTimer.singleShot(250, self._activate_gpu_fallback)
 
+    # How long the black cover stays up after the OpenGL output has been created
+    SWITCH_COVER_SECS = 0.9
+
+    @staticmethod
+    def _vulkan_available() -> bool:
+        """True if the Windows Vulkan loader can be loaded."""
+        if sys.platform != "win32":
+            return False
+        try:
+            import ctypes
+            ctypes.WinDLL("vulkan-1.dll")
+            return True
+        except OSError:
+            return False
+
+    def _wait_vo_configured(self, timeout: float) -> bool:
+        """Wait until mpv reports that its video output is up."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                if getattr(self.player, "vo_configured", False):
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.05)
+        return False
+
     def _activate_gpu_fallback(self):
         """Rebuild the gpu-next video output on OpenGL (WGL) for the rest of this process."""
+        cover_up = False
         try:
             if not self.player:
                 return
+            # The new native video window is white until it draws; cover it first and let the
+            # cover paint before the UI thread blocks inside the output rebuild.
+            self._safe_emit("video_cover_signal", True)
+            cover_up = True
+            app = QApplication.instance()
+            if app:
+                app.processEvents()
             self.shader_monitor.reset()
-            self._shader_watch_off()
+            self._shader_watch_off(force=True)
             was_paused = bool(getattr(self.player, "pause", False))
             hdr_output_was_active = bool(getattr(self.tonemap_engine, "display_is_hdr", False))
 
@@ -561,6 +616,7 @@ class MPVEngine:
                 self.player[key.replace("_", "-")] = value
             self.player["vo"] = "gpu-next"
             self.gpu_fallback_active = True
+            self.renderer = "opengl"
 
             # A WGL swapchain is SDR-only: stop offering HDR output and, if an
             # HDR-display pipeline was active, reconfigure it for SDR output.
@@ -586,6 +642,9 @@ class MPVEngine:
             self._shader_heal_pending = False
             if self._video_concealed:
                 self._conceal_reveal_at = time.monotonic() + self.CONCEAL_FALLBACK_SETTLE_SECS
+            if cover_up:
+                QTimer.singleShot(int(self.SWITCH_COVER_SECS * 1000),
+                                  lambda: self._safe_emit("video_cover_signal", False))
 
     def _trigger_defect_check(self, pts: Optional[float] = None, context: str = ""):
         """Trigger an automated background render inspection for visual defects."""
@@ -672,18 +731,51 @@ class MPVEngine:
         }
         if self.wid is not None:
             opts["wid"] = str(int(self.wid))
-        if getattr(self, "gpu_fallback_active", False):
+        if self.renderer == "opengl":
             opts.update(self.GPU_FALLBACK_OPTS)
+        elif self.PREFER_VULKAN and not self._vulkan_failed and self._vulkan_available():
+            self.renderer = "vulkan"
+            opts.update(self.VULKAN_OPTS)
+        else:
+            self.renderer = "d3d11"
+        self.gpu_fallback_active = self.renderer != "d3d11"
+        opts["libplacebo_opts"] = self.LIBPLACEBO_OPTS
 
         # The log hook feeds ShaderIntegrityMonitor. It starts silent; _shader_watch_on()
         # raises it to libplacebo-only debug output while shaders are compiling.
         self._shader_watch_active = False
         self._shader_watch_until = 0.0
-        if self.SHADER_WATCH_ENABLED:
-            opts["msg_level"] = "all=no"
-            self.player = mpv.MPV(log_handler=self._on_mpv_log, loglevel="no", **opts)
-        else:
-            self.player = mpv.MPV(**opts)
+        try:
+            if self.SHADER_WATCH_ENABLED and self.renderer == "d3d11":
+                if self.SHADER_WATCH_ALWAYS_ON:
+                    opts["msg_level"] = self.SHADER_WATCH_MSG_LEVEL
+                    self.player = mpv.MPV(log_handler=self._on_mpv_log, loglevel="debug", **opts)
+                    self._shader_watch_active = True
+                else:
+                    opts["msg_level"] = "all=no"
+                    self.player = mpv.MPV(log_handler=self._on_mpv_log, loglevel="no", **opts)
+            else:
+                self.player = mpv.MPV(**opts)
+            vulkan_up = self.renderer != "vulkan" or self._wait_vo_configured(2.0)
+        except Exception:
+            if self.renderer != "vulkan":
+                raise
+            self.player = None
+            vulkan_up = False
+
+        # Vulkan can fail to come up (old driver, no Vulkan device, libmpv built without it):
+        # fall back to Direct3D 11
+        if self.renderer == "vulkan" and not vulkan_up:
+            try:
+                if self.player is not None:
+                    self.player.terminate()
+            except Exception:
+                pass
+            self.player = None
+            self._vulkan_failed = True
+            self.renderer = "d3d11"
+            self.gpu_fallback_active = False
+            return self._init_mpv()
         self.tonemap_engine = TonemapEngine(self.player)
         self.stereo3d_engine = Stereo3DEngine(self.player)
 

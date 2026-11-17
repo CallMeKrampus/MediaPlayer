@@ -389,6 +389,11 @@ class VideoWidget(QWidget):
         self.nv_viewport = NVJPEG2KCanvas(self)
         self.nv_viewport.hide()
 
+        # 3. Opaque black window shown above the mpv surface while the video output is rebuilt.
+        #    A new native video window is white until its first frame; this hides that.
+        self.switch_cover = NativeViewportWidget(self)
+        self.switch_cover.hide()
+
     def paintEvent(self, ev):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(0, 0, 0))
@@ -396,6 +401,16 @@ class VideoWidget(QWidget):
     def get_mpv_wid(self) -> int:
         """Return the window handle (HWND) dedicated to mpv video presentation."""
         return int(self.mpv_viewport.winId())
+
+    def set_switch_cover(self, on: bool):
+        """Show or hide the black cover above the video surface."""
+        if on:
+            self.switch_cover.setGeometry(self.rect())
+            self.switch_cover.show()
+            self.switch_cover.raise_()
+            self.switch_cover.repaint()
+        else:
+            self.switch_cover.hide()
 
     def show_nv_viewport(self):
         """Activate NVIDIA nvJPEG2000 presentation surface."""
@@ -448,6 +463,7 @@ class VideoWidget(QWidget):
         r = self.rect()
         self.mpv_viewport.setGeometry(r)
         self.nv_viewport.setGeometry(r)
+        self.switch_cover.setGeometry(r)
 
     def mouseMoveEvent(self, ev: QMouseEvent):
         self.mouse_moved_signal.emit()

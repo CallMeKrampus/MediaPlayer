@@ -782,6 +782,7 @@ class MainWindow(QMainWindow):
         self.engine.bridge.track_list_signal.connect(self._on_engine_track_list_changed)
         self.engine.bridge.tonemap_status_signal.connect(self._on_tonemap_status_changed)
         self.engine.bridge.defect_detected_signal.connect(self._handle_defect_detected)
+        self.engine.bridge.video_cover_signal.connect(self.video_widget.set_switch_cover)
         self._last_auto_color_toast = None
 
     def _on_engine_track_list_changed(self, tracks: list):
